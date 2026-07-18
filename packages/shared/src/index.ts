@@ -289,6 +289,34 @@ export interface RiskSnapshot {
   message: string;
 }
 
+export interface DeployerHistoryEntryView {
+  chainId: number;
+  tokenAddress: `0x${string}`;
+  scanId: string;
+  riskLevel: RiskLevel | null;
+  riskScore: number | null;
+  highOrCriticalFindingCount: number;
+  scannedAt: string;
+}
+
+/**
+ * Deployer/wallet intelligence (Milestone 6) built entirely from Sentinel's own prior scan
+ * history — never an external reputation service or "known scammer" list. Absence of history
+ * means no prior scans were found, not that the deployer is clean.
+ */
+export interface DeployerHistoryView {
+  deployerAddress: `0x${string}`;
+  previousTokenCount: number;
+  previousHighOrCriticalCount: number;
+  entries: DeployerHistoryEntryView[];
+}
+
+export interface BytecodeReuseView {
+  bytecodeHash: string;
+  reusedByCount: number;
+  reusedByAddresses: `0x${string}`[];
+}
+
 export function createHealth(service: string): ServiceHealth {
   return {
     status: "ok",

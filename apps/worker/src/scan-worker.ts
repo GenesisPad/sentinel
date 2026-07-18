@@ -1,5 +1,6 @@
 import { encodeFunctionData, parseAbi } from "viem";
 import type { ChainAdapter } from "@genesis-sentinel/chain-adapters";
+import { hashBytecode } from "@genesis-sentinel/database";
 import type { ScanRepository } from "@genesis-sentinel/database";
 import type { ScanJobData } from "@genesis-sentinel/queue";
 import {
@@ -22,6 +23,7 @@ import {
   createUnsupportedHolderAnalysis,
   createUnsupportedLiquidityDiscovery,
   createUnsupportedTradeSimulations,
+  deployerHistoryDetector,
   genesispadLaunchDetector,
   liveTradingStateDetector,
   ownershipRolesAbiDetector,
@@ -748,11 +750,27 @@ export async function processScanJob(
       { launch: genesispadLaunch },
       detectorRunContext
     );
+    const deployerHistory = tokenProfile.deployerAddress
+      ? await dependencies.scans
+          .getDeployerHistory(target.chainId, tokenProfile.deployerAddress, target.address)
+          .catch(() => null)
+      : null;
+    const bytecodeHash = bytecode !== "0x" ? hashBytecode(bytecode) : null;
+    const bytecodeReuse = bytecodeHash
+      ? await dependencies.scans
+          .getBytecodeReuse(target.chainId, bytecodeHash, target.address)
+          .catch(() => null)
+      : null;
+    const deployerHistoryResult = await deployerHistoryDetector.run(
+      { deployerHistory, bytecodeReuse },
+      detectorRunContext
+    );
     detectorResults.push(
       sourceDetectorResult,
       ownershipRolesResult,
       liveTradingStateResult,
-      genesispadLaunchResult
+      genesispadLaunchResult,
+      deployerHistoryResult
     );
     const detectorCompletedAt = now();
     for (const result of detectorResults) {

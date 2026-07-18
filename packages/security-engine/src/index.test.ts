@@ -7,6 +7,7 @@ import {
   createUnsupportedTradeSimulations,
   createEmptyDetectorResult,
   dangerousOpcodeDetector,
+  deployerHistoryDetector,
   eip1967ProxyDetector,
   genesispadLaunchDetector,
   liveTradingStateDetector,
@@ -592,6 +593,98 @@ describe("genesispad launch detector", () => {
     );
 
     expect(result.findings[0]?.recommendation).toBeTruthy();
+  });
+});
+
+describe("deployer history detector", () => {
+  it("reports data unavailable when no deployer address is known", async () => {
+    const result = await deployerHistoryDetector.run(
+      { deployerHistory: null, bytecodeReuse: null },
+      context
+    );
+
+    expect(result.findings).toEqual([]);
+    const deployerCheck = result.checks.find((check) => check.code === "DEPLOYER_HISTORY_UNAVAILABLE");
+    expect(deployerCheck).toMatchObject({ outcome: "DATA_UNAVAILABLE" });
+  });
+
+  it("passes without a finding when the deployer has no prior tokens", async () => {
+    const result = await deployerHistoryDetector.run(
+      {
+        deployerHistory: {
+          deployerAddress: "0x0000000000000000000000000000000000000002",
+          previousTokenCount: 0,
+          previousHighOrCriticalCount: 0,
+          entries: []
+        },
+        bytecodeReuse: null
+      },
+      context
+    );
+
+    expect(result.findings).toEqual([]);
+    expect(result.checks[0]).toMatchObject({ code: "DEPLOYER_HISTORY_ABSENT", outcome: "PASSED" });
+  });
+
+  it("escalates severity when prior tokens had high/critical findings", async () => {
+    const result = await deployerHistoryDetector.run(
+      {
+        deployerHistory: {
+          deployerAddress: "0x0000000000000000000000000000000000000002",
+          previousTokenCount: 5,
+          previousHighOrCriticalCount: 3,
+          entries: []
+        },
+        bytecodeReuse: null
+      },
+      context
+    );
+
+    expect(result.findings[0]).toMatchObject({
+      code: "DEPLOYER_PRIOR_SCAN_HISTORY",
+      severity: "HIGH",
+      category: "REPUTATION_RISK"
+    });
+    expect(result.findings[0]?.description).toContain("5 other token(s)");
+    expect(result.findings[0]?.description).toContain("3 of those scans");
+  });
+
+  it("reports INFO severity when prior tokens had no high/critical findings", async () => {
+    const result = await deployerHistoryDetector.run(
+      {
+        deployerHistory: {
+          deployerAddress: "0x0000000000000000000000000000000000000002",
+          previousTokenCount: 2,
+          previousHighOrCriticalCount: 0,
+          entries: []
+        },
+        bytecodeReuse: null
+      },
+      context
+    );
+
+    expect(result.findings[0]).toMatchObject({ severity: "INFO" });
+  });
+
+  it("flags reused bytecode across other scanned contracts", async () => {
+    const result = await deployerHistoryDetector.run(
+      {
+        deployerHistory: null,
+        bytecodeReuse: {
+          bytecodeHash: "abc123",
+          reusedByCount: 2,
+          reusedByAddresses: [
+            "0x0000000000000000000000000000000000000003",
+            "0x0000000000000000000000000000000000000004"
+          ]
+        }
+      },
+      context
+    );
+
+    expect(result.findings.some((finding) => finding.code === "BYTECODE_REUSED_ACROSS_SCANS")).toBe(
+      true
+    );
   });
 });
 

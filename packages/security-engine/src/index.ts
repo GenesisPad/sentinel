@@ -1,7 +1,9 @@
 import { toFunctionSelector } from "viem";
 import { riskLevelForScore } from "@genesis-sentinel/shared";
 import type {
+  BytecodeReuseView,
   CheckOutcome,
+  DeployerHistoryView,
   FindingConfidence,
   FindingEvidence,
   FindingSeverity,
@@ -1293,6 +1295,151 @@ export const genesispadLaunchDetector: SecurityDetector<GenesisPadLaunchDetector
               })
         })
       ]
+    };
+  }
+};
+
+export interface DeployerHistoryDetectorInput {
+  deployerHistory: DeployerHistoryView | null;
+  bytecodeReuse: BytecodeReuseView | null;
+}
+
+/**
+ * Builds deployer/wallet intelligence entirely from Sentinel's own prior scan history (see
+ * @genesis-sentinel/database's getDeployerHistory/getBytecodeReuse) — never an external
+ * reputation service or "known scammer" list. Per the project rule, a deployer is never
+ * labeled malicious solely for being fresh, reusing bytecode, or having deployed multiple
+ * contracts; findings describe only what Sentinel itself observed, in the exact terms
+ * observed (counts and outcomes), not a verdict.
+ */
+export const deployerHistoryDetector: SecurityDetector<DeployerHistoryDetectorInput> = {
+  metadata: {
+    id: "deployer-history",
+    version: detectorVersion,
+    name: "Deployer and bytecode history",
+    description:
+      "Summarizes this deployer's and this contract's bytecode's prior appearances across Sentinel's own scan history."
+  },
+
+  async run(input, context) {
+    await Promise.resolve();
+    const findings: SecurityFinding[] = [];
+    const checks: DetectorCheck[] = [];
+
+    if (input.deployerHistory) {
+      const evidence: FindingEvidence = {
+        type: "EXTERNAL_SOURCE",
+        summary: "Sentinel's own prior scans by this deployer address",
+        address: context.address,
+        data: {
+          deployerAddress: input.deployerHistory.deployerAddress,
+          previousTokenCount: input.deployerHistory.previousTokenCount,
+          previousHighOrCriticalCount: input.deployerHistory.previousHighOrCriticalCount,
+          entries: input.deployerHistory.entries
+        }
+      };
+      if (context.blockNumber !== undefined) {
+        evidence.blockNumber = context.blockNumber;
+      }
+
+      if (input.deployerHistory.previousTokenCount > 0) {
+        const { previousTokenCount, previousHighOrCriticalCount } = input.deployerHistory;
+        const severity: FindingSeverity =
+          previousHighOrCriticalCount >= 3
+            ? "HIGH"
+            : previousHighOrCriticalCount > 0
+              ? "MEDIUM"
+              : "INFO";
+
+        findings.push(
+          createFinding({
+            code: "DEPLOYER_PRIOR_SCAN_HISTORY",
+            detector: this.metadata,
+            title: "Deployer has prior tokens scanned by Sentinel",
+            severity,
+            category: "REPUTATION_RISK",
+            confidence: "HIGH",
+            description:
+              previousHighOrCriticalCount > 0
+                ? `This deployer address previously created ${previousTokenCount} other token(s) scanned by Sentinel. ${previousHighOrCriticalCount} of those scans recorded a HIGH or CRITICAL severity finding.`
+                : `This deployer address previously created ${previousTokenCount} other token(s) scanned by Sentinel. None of those scans recorded a HIGH or CRITICAL severity finding.`,
+            technicalExplanation:
+              "Computed by matching this scan's deployer address against Token.deployerAddress across Sentinel's own persisted scan history for this chain, excluding the current token.",
+            evidence: [evidence],
+            recommendation:
+              "This describes Sentinel's own scan history only, not a verdict — review the individual prior scans linked in evidence before drawing a conclusion."
+          })
+        );
+      }
+
+      checks.push({
+        code:
+          input.deployerHistory.previousTokenCount > 0
+            ? "DEPLOYER_HISTORY_FOUND"
+            : "DEPLOYER_HISTORY_ABSENT",
+        outcome: input.deployerHistory.previousTokenCount > 0 ? "DETECTED" : "PASSED",
+        confidence: "HIGH",
+        evidence: [evidence]
+      });
+    } else {
+      checks.push({
+        code: "DEPLOYER_HISTORY_UNAVAILABLE",
+        outcome: "DATA_UNAVAILABLE",
+        confidence: "LOW",
+        evidence: [
+          {
+            type: "EXTERNAL_SOURCE",
+            summary: "No deployer address was available to search Sentinel's scan history",
+            address: context.address,
+            data: {}
+          }
+        ]
+      });
+    }
+
+    if (input.bytecodeReuse && input.bytecodeReuse.reusedByCount > 0) {
+      const evidence: FindingEvidence = {
+        type: "BYTECODE",
+        summary: "Sentinel's own scans of contracts with identical runtime bytecode",
+        address: context.address,
+        data: {
+          bytecodeHash: input.bytecodeReuse.bytecodeHash,
+          reusedByCount: input.bytecodeReuse.reusedByCount,
+          reusedByAddresses: input.bytecodeReuse.reusedByAddresses
+        }
+      };
+      if (context.blockNumber !== undefined) {
+        evidence.blockNumber = context.blockNumber;
+      }
+
+      findings.push(
+        createFinding({
+          code: "BYTECODE_REUSED_ACROSS_SCANS",
+          detector: this.metadata,
+          title: "Contract bytecode matches other contracts scanned by Sentinel",
+          severity: "MEDIUM",
+          category: "REPUTATION_RISK",
+          confidence: "HIGH",
+          description: `This contract's runtime bytecode is byte-for-byte identical to ${input.bytecodeReuse.reusedByCount} other contract(s) Sentinel has scanned on this chain.`,
+          technicalExplanation:
+            "Computed by comparing this contract's SHA-256 runtime bytecode hash against Contract.bytecodeHash across Sentinel's own persisted scan history for this chain.",
+          evidence: [evidence],
+          recommendation:
+            "Identical bytecode can mean a shared, audited template (e.g. a token launchpad's standard contract) or a cloned scam factory — review the other addresses in evidence to tell which."
+        })
+      );
+      checks.push({
+        code: "BYTECODE_REUSE_DETECTED",
+        outcome: "DETECTED",
+        confidence: "HIGH",
+        evidence: [evidence]
+      });
+    }
+
+    return {
+      detector: this.metadata,
+      checks,
+      findings
     };
   }
 };

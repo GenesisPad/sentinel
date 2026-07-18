@@ -129,6 +129,7 @@ model Token {
 
   @@unique([chainId, address])
   @@index([address])
+  @@index([deployerAddress])
 }
 
 model Contract {
@@ -147,6 +148,7 @@ model Contract {
 
   @@unique([chainId, address])
   @@index([address])
+  @@index([bytecodeHash])
 }
 
 model Scan {

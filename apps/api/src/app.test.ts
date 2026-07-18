@@ -126,6 +126,19 @@ describe("api foundation", () => {
     },
     async recordHolderSnapshot() {
       await Promise.resolve();
+    },
+    async getDeployerHistory(_chainId, deployerAddress) {
+      await Promise.resolve();
+      return {
+        deployerAddress,
+        previousTokenCount: 0,
+        previousHighOrCriticalCount: 0,
+        entries: []
+      };
+    },
+    async getBytecodeReuse(_chainId, bytecodeHash) {
+      await Promise.resolve();
+      return { bytecodeHash, reusedByCount: 0, reusedByAddresses: [] };
     }
   };
   const enqueuedScanIds: string[] = [];

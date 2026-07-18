@@ -10,7 +10,9 @@ import type {
 import {
   normalizeEvmAddress,
   scannerVersion,
+  type BytecodeReuseView,
   type CheckOutcome,
+  type DeployerHistoryView,
   type DetectorCheckView,
   type FindingEvidenceView,
   type FindingSeverity,
@@ -73,6 +75,16 @@ export interface ScanRepository {
   getTokenFindings(chainId: number, address: `0x${string}`): Promise<SecurityFindingView[]>;
   getRiskSnapshot(chainId: number, address: `0x${string}`): Promise<RiskSnapshot | null>;
   getScanTarget(scanId: string): Promise<ScanTarget | null>;
+  getDeployerHistory(
+    chainId: number,
+    deployerAddress: `0x${string}`,
+    excludeAddress: `0x${string}`
+  ): Promise<DeployerHistoryView>;
+  getBytecodeReuse(
+    chainId: number,
+    bytecodeHash: string,
+    excludeAddress: `0x${string}`
+  ): Promise<BytecodeReuseView>;
   updateScanState(input: UpdateScanStateInput): Promise<void>;
   recordScanBlock(input: RecordScanBlockInput): Promise<void>;
   recordStage(input: RecordStageInput): Promise<void>;
@@ -874,6 +886,83 @@ export function createScanRepository(db: PrismaDatabase): ScanRepository {
         create: createData,
         update: updateData
       });
+    },
+
+    async getDeployerHistory(chainId, deployerAddress, excludeAddress) {
+      const normalizedDeployer = normalizeEvmAddress(deployerAddress);
+      const normalizedExclude = normalizeEvmAddress(excludeAddress);
+
+      const tokens = await db.token.findMany({
+        where: {
+          chainId,
+          deployerAddress: normalizedDeployer,
+          address: { not: normalizedExclude }
+        },
+        include: {
+          scans: {
+            where: { state: { in: ["COMPLETED", "PARTIALLY_COMPLETED"] } },
+            orderBy: { completedAt: "desc" },
+            take: 1,
+            include: {
+              riskAssessment: true,
+              findings: {
+                where: { severity: { in: ["HIGH", "CRITICAL"] } },
+                select: { id: true }
+              }
+            }
+          }
+        }
+      });
+
+      const entries = tokens.flatMap((token) => {
+        const scan = token.scans[0];
+        if (!scan) {
+          return [];
+        }
+
+        return [
+          {
+            chainId: token.chainId,
+            tokenAddress: token.address as `0x${string}`,
+            scanId: scan.id,
+            riskLevel: scan.riskAssessment
+              ? scan.riskAssessment.level === "UNABLE_TO_VERIFY"
+                ? ("UNABLE_TO_ASSESS" as const)
+                : scan.riskAssessment.level
+              : null,
+            riskScore: scan.riskAssessment?.score ?? null,
+            highOrCriticalFindingCount: scan.findings.length,
+            scannedAt: (scan.completedAt ?? scan.createdAt).toISOString()
+          }
+        ];
+      });
+
+      return {
+        deployerAddress: normalizedDeployer,
+        previousTokenCount: entries.length,
+        previousHighOrCriticalCount: entries.filter((entry) => entry.highOrCriticalFindingCount > 0)
+          .length,
+        entries
+      };
+    },
+
+    async getBytecodeReuse(chainId, bytecodeHash, excludeAddress) {
+      const normalizedExclude = normalizeEvmAddress(excludeAddress);
+      const contracts = await db.contract.findMany({
+        where: {
+          chainId,
+          bytecodeHash,
+          address: { not: normalizedExclude }
+        },
+        select: { address: true },
+        take: 25
+      });
+
+      return {
+        bytecodeHash,
+        reusedByCount: contracts.length,
+        reusedByAddresses: contracts.map((contract) => contract.address as `0x${string}`)
+      };
     }
   };
 }
@@ -1265,8 +1354,14 @@ function isUniqueConstraintError(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
-function hashHex(value: `0x${string}`): string {
+/** Exported so callers (e.g. the worker's deployer/bytecode-history lookup) can compute the
+ * exact same hash `recordContractObservation` persists, without re-deriving the algorithm. */
+export function hashBytecode(value: `0x${string}`): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function hashHex(value: `0x${string}`): string {
+  return hashBytecode(value);
 }
 
 function firstCheckOutcome(result: DetectorResult): CheckOutcome | undefined {

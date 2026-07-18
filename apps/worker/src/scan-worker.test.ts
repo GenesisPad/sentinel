@@ -83,6 +83,19 @@ function createRepository(chainId = 4663) {
     async recordHolderSnapshot(input) {
       await Promise.resolve();
       calls.push(`holders:${input.concentration ? "concentration" : "none"}`);
+    },
+    async getDeployerHistory(_chainId, deployerAddress) {
+      await Promise.resolve();
+      return {
+        deployerAddress,
+        previousTokenCount: 0,
+        previousHighOrCriticalCount: 0,
+        entries: []
+      };
+    },
+    async getBytecodeReuse(_chainId, bytecodeHash) {
+      await Promise.resolve();
+      return { bytecodeHash, reusedByCount: 0, reusedByAddresses: [] };
     }
   };
 
@@ -225,6 +238,7 @@ describe("scan worker orchestration", () => {
       "detector:ownership-roles-abi:0",
       "detector:live-trading-state:0",
       "detector:genesispad-launch-provenance:0",
+      "detector:deployer-history:0",
       "stage:ANALYZING_CONTRACT:SUCCEEDED",
       "state:DISCOVERING_MARKETS",
       "stage:DISCOVERING_MARKETS:RUNNING",
