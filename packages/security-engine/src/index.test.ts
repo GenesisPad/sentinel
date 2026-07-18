@@ -413,6 +413,59 @@ describe("source-code risk detector", () => {
       expect.arrayContaining(["SOURCE_ROUTER_OR_PAIR_REPLACEMENT", "SOURCE_ARBITRARY_EXTERNAL_CALL"])
     );
   });
+
+  it("does not flag risky patterns found only in unrelated sibling files from the same verified submission", async () => {
+    // Regression test: explorers return every file from a contract's compilation project as
+    // "verified source," including sibling contracts and third-party interfaces that never run
+    // as part of the deployed address's bytecode. A clean token bundled alongside an unrelated
+    // interface exposing `setOwner` (e.g. Uniswap's IUniswapV3Factory) must not be flagged for
+    // ownership-recovery risk it doesn't actually have.
+    const result = await sourceCodeRiskDetector.run(
+      {
+        status: "VERIFIED",
+        address: context.address,
+        contractName: "CleanToken",
+        sourceFiles: [
+          {
+            filename: "src/CleanToken.sol",
+            sourceCode: `
+              import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+              contract CleanToken is ERC20 {
+                constructor() ERC20("Clean", "CLEAN") { _mint(msg.sender, 1_000_000e18); }
+              }
+            `
+          },
+          {
+            filename: "@openzeppelin/contracts/token/ERC20/ERC20.sol",
+            sourceCode: `
+              contract ERC20 {
+                constructor(string memory name_, string memory symbol_) {}
+              }
+            `
+          },
+          {
+            filename: "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol",
+            sourceCode: `
+              interface IUniswapV3Factory {
+                function setOwner(address _owner) external;
+              }
+            `
+          },
+          {
+            filename: "src/UnrelatedLegacyToken.sol",
+            sourceCode: `
+              contract UnrelatedLegacyToken {
+                function forceTransfer(address from, address to, uint256 amount) external onlyOwner {}
+              }
+            `
+          }
+        ]
+      },
+      context
+    );
+
+    expect(result.findings).toEqual([]);
+  });
 });
 
 describe("ownership/roles ABI detector", () => {

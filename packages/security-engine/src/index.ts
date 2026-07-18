@@ -929,10 +929,20 @@ export const sourceCodeRiskDetector: SecurityDetector<ContractSourceDetectorInpu
       };
     }
 
+    // Explorers often return every file from the deployed contract's compilation project as
+    // "verified source" — including unrelated sibling contracts, mocks, and third-party
+    // interfaces that happen to share the same submission but never run as part of this
+    // address's bytecode (e.g. a Uniswap interface's `setOwner` declaration, or a platform's
+    // OTHER token template). Scanning all of them produces false positives attributed to code
+    // this contract doesn't execute. When `contractName` identifies the deployed contract and
+    // its declaration is found, scope matching to that file and its real import closure; when
+    // it can't be identified, fall back to scanning every file rather than guessing wrong.
+    const relevantSourceFiles = relevantSourceFilesFor(input.sourceFiles, input.contractName ?? null);
+
     const findings: SecurityFinding[] = [];
     const checks: DetectorCheck[] = [];
     for (const rule of sourceRiskRules) {
-      const matches = matchSourceRule(input.sourceFiles, rule);
+      const matches = matchSourceRule(relevantSourceFiles, rule);
       const evidence = createSourceEvidence(context, input, {
         ruleCode: rule.code,
         matches
@@ -1870,6 +1880,95 @@ function matchSourceRule(sourceFiles: ContractSourceFile[], rule: SourceRiskRule
 
 function stripSolidityComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
+}
+
+/**
+ * Scopes source-file scanning to the deployed contract's own file plus its real import
+ * closure, using `contractName` (reported by the explorer) to find the file that declares
+ * `contract|abstract contract|library|interface <contractName>`. Falls back to scanning every
+ * returned file when the contract can't be identified this way — under-scoping (scanning
+ * unrelated files) produces false positives, but over-scoping (missing a file that's genuinely
+ * part of the contract) could hide a real one, so an unresolved case defers to the wider scan
+ * rather than guessing.
+ */
+function relevantSourceFilesFor(
+  sourceFiles: ContractSourceFile[],
+  contractName: string | null
+): ContractSourceFile[] {
+  if (!contractName || sourceFiles.length <= 1) {
+    return sourceFiles;
+  }
+
+  const declarationPattern = new RegExp(
+    `\\b(?:contract|abstract\\s+contract|library|interface)\\s+${escapeRegExp(contractName)}\\b`
+  );
+  const entryFile = sourceFiles.find((file) =>
+    declarationPattern.test(stripSolidityComments(file.sourceCode))
+  );
+  if (!entryFile) {
+    return sourceFiles;
+  }
+
+  const byFilename = new Map(sourceFiles.map((file) => [file.filename, file]));
+  const visited = new Set<string>();
+  const queue = [entryFile.filename];
+  const relevant: ContractSourceFile[] = [];
+
+  while (queue.length > 0) {
+    const filename = queue.shift();
+    if (!filename || visited.has(filename)) continue;
+    visited.add(filename);
+
+    const file = byFilename.get(filename);
+    if (!file) continue;
+    relevant.push(file);
+
+    for (const importPath of extractImportPaths(stripSolidityComments(file.sourceCode))) {
+      const resolved = resolveImportPath(filename, importPath);
+      if (byFilename.has(resolved)) {
+        queue.push(resolved);
+        continue;
+      }
+      // Fallback for import styles that don't resolve to an exact filename match (e.g. a
+      // remapped path): match by trailing path segments instead of dropping the import.
+      const bySuffix = sourceFiles.find((candidate) =>
+        candidate.filename.endsWith(importPath.replace(/^(\.\.?\/)+/, ""))
+      );
+      if (bySuffix) {
+        queue.push(bySuffix.filename);
+      }
+    }
+  }
+
+  return relevant;
+}
+
+function extractImportPaths(source: string): string[] {
+  const paths: string[] = [];
+  const importPattern = /import\s+(?:\{[^}]*\}\s+from\s+|[\w*\s]+from\s+)?["']([^"']+)["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = importPattern.exec(source)) !== null) {
+    if (match[1]) paths.push(match[1]);
+  }
+  return paths;
+}
+
+function resolveImportPath(fromFile: string, importPath: string): string {
+  if (!importPath.startsWith(".")) {
+    return importPath;
+  }
+
+  const resolved = fromFile.split("/").slice(0, -1);
+  for (const segment of importPath.split("/")) {
+    if (segment === "." || segment === "") continue;
+    if (segment === "..") resolved.pop();
+    else resolved.push(segment);
+  }
+  return resolved.join("/");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function sourceSnippet(source: string, index: number): string {
