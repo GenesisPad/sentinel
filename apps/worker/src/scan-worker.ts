@@ -555,6 +555,8 @@ async function buildRelatedWalletEdges(input: {
   bytecodeReuse: BytecodeReuseView | null;
 }): Promise<RelatedWalletEdge[]> {
   const edges: RelatedWalletEdge[] = [];
+  const ownerIsActive =
+    input.ownerAddress !== null && !burnOrZeroAddresses.has(input.ownerAddress.toLowerCase());
 
   if (input.deployerAddress) {
     edges.push({
@@ -566,7 +568,7 @@ async function buildRelatedWalletEdges(input: {
     });
   }
 
-  if (input.ownerAddress && !burnOrZeroAddresses.has(input.ownerAddress.toLowerCase())) {
+  if (ownerIsActive && input.ownerAddress) {
     edges.push({
       type: "OWNED_BY",
       address: input.ownerAddress,
@@ -589,30 +591,105 @@ async function buildRelatedWalletEdges(input: {
     }
   }
 
-  if (input.providers?.walletClustering && input.deployerAddress) {
-    const deployerAddress = input.deployerAddress;
-    const fundedByEdge = await input.providers.walletClustering
-      .findFundingWallet({ chainId: input.chainId, address: deployerAddress })
+  // Renouncing ownership does not erase the deployer's or a previous owner's history — both are
+  // still tracked below regardless of the current (possibly renounced) owner() result.
+  let previousOwner: `0x${string}` | null = null;
+  if (!ownerIsActive && input.providers?.walletClustering) {
+    const previousOwnerResult = await input.providers.walletClustering
+      .findPreviousOwner({
+        chainId: input.chainId,
+        adapter: input.adapter,
+        tokenAddress: input.tokenAddress,
+        fromBlock: 0n,
+        toBlock: input.blockNumber
+      })
       .catch((): null => null);
-    if (fundedByEdge) {
-      edges.push(fundedByEdge);
+    if (
+      previousOwnerResult &&
+      previousOwnerResult.address.toLowerCase() !== input.deployerAddress?.toLowerCase()
+    ) {
+      previousOwner = previousOwnerResult.address;
+      edges.push({
+        type: "PREVIOUSLY_OWNED_BY",
+        address: previousOwner,
+        confidence: "HIGH",
+        evidence:
+          "Recovered from an OwnershipTransferred log where ownership was transferred to a burn/zero address (renouncement); this address held ownership immediately before that.",
+        source: "ownership-transferred-log-scan",
+        ...(previousOwnerResult.blockNumber
+          ? { firstObservedBlock: previousOwnerResult.blockNumber }
+          : {})
+      });
+    }
+  }
+
+  if (input.providers?.walletClustering) {
+    const trackedWallets = new Map<string, { address: `0x${string}`; roleLabel: string }>();
+    if (input.deployerAddress) {
+      trackedWallets.set(input.deployerAddress.toLowerCase(), {
+        address: input.deployerAddress,
+        roleLabel: "deployer"
+      });
+    }
+    if (ownerIsActive && input.ownerAddress) {
+      trackedWallets.set(input.ownerAddress.toLowerCase(), {
+        address: input.ownerAddress,
+        roleLabel: "current owner"
+      });
+    }
+    if (previousOwner) {
+      trackedWallets.set(previousOwner.toLowerCase(), {
+        address: previousOwner,
+        roleLabel: "previous owner (since renounced)"
+      });
     }
 
-    const supplyEdges = await input.providers.walletClustering
-      .findSupplyTransfers({
-        adapter: input.adapter,
-        chainId: input.chainId,
-        tokenAddress: input.tokenAddress,
-        deployerAddress,
-        fromBlock: 0n,
-        toBlock: input.blockNumber,
-        totalSupply: input.totalSupply
-      })
-      .catch((): RelatedWalletEdge[] => []);
-    edges.push(...supplyEdges);
+    const walletClustering = input.providers.walletClustering;
+    for (const { address, roleLabel } of trackedWallets.values()) {
+      const fundedByEdge = await walletClustering
+        .findFundingWallet({ chainId: input.chainId, address, roleLabel })
+        .catch((): null => null);
+      if (fundedByEdge) {
+        edges.push(fundedByEdge);
+      }
+
+      const supplyEdges = await walletClustering
+        .findSupplyTransfers({
+          adapter: input.adapter,
+          chainId: input.chainId,
+          tokenAddress: input.tokenAddress,
+          fromAddress: address,
+          roleLabel,
+          fromBlock: 0n,
+          toBlock: input.blockNumber,
+          totalSupply: input.totalSupply
+        })
+        .catch((): RelatedWalletEdge[] => []);
+      edges.push(...supplyEdges);
+    }
   }
 
   return edges;
+}
+
+/**
+ * Feeds Milestone 6 wallet-clustering edges into Milestone 4 holder concentration: excludes
+ * DEPLOYED_BY/OWNED_BY (already reported separately as deployerPct/ownerPct) and returns the
+ * remaining connected addresses (previous owner, funding sources, supply recipients,
+ * shared-bytecode deployments) so concentration can flag them as connected rather than
+ * counting them as unrelated wallets.
+ */
+function relatedWalletAddressesForHolders(edges: RelatedWalletEdge[]): `0x${string}`[] {
+  const addresses = new Set<string>();
+  const result: `0x${string}`[] = [];
+  for (const edge of edges) {
+    if (edge.type === "DEPLOYED_BY" || edge.type === "OWNED_BY") continue;
+    const key = edge.address.toLowerCase();
+    if (addresses.has(key)) continue;
+    addresses.add(key);
+    result.push(edge.address);
+  }
+  return result;
 }
 
 export interface ScanProcessorDependencies {
@@ -989,7 +1066,8 @@ export async function processScanJob(
               holderCount: tokenProfile.holderCount,
               deployerAddress: tokenProfile.deployerAddress,
               ownerAddress,
-              liquidityPoolAddresses: discoveredPools?.map((pool) => pool.poolAddress) ?? []
+              liquidityPoolAddresses: discoveredPools?.map((pool) => pool.poolAddress) ?? [],
+              relatedWalletAddresses: relatedWalletAddressesForHolders(relatedWalletEdges)
             }
           })
           .catch(() => null)

@@ -292,6 +292,9 @@ async function discoverBlockscoutHolderConcentration(
   const normalizedLockers = knownLockerAddresses.map((lockerAddress) => lockerAddress.toLowerCase());
   const normalizedDeployer = context.deployerAddress?.toLowerCase();
   const normalizedOwner = context.ownerAddress?.toLowerCase();
+  const normalizedRelatedWallets = (context.relatedWalletAddresses ?? []).map((related) =>
+    related.toLowerCase()
+  );
   const pctOfBalance = (balanceRaw: string): number => {
     try {
       return Number((BigInt(balanceRaw) * 10_000n) / total) / 100;
@@ -311,6 +314,7 @@ async function discoverBlockscoutHolderConcentration(
     if (normalizedBurnAddresses.includes(normalized)) labels.push("BURN");
     if (normalizedPools.includes(normalized)) labels.push("LIQUIDITY_POOL");
     if (normalizedLockers.includes(normalized)) labels.push("LOCKER");
+    if (normalizedRelatedWallets.includes(normalized)) labels.push("RELATED_WALLET");
     labels.push(row.isContract ? "CONTRACT" : "EOA");
 
     return {
@@ -345,6 +349,7 @@ async function discoverBlockscoutHolderConcentration(
   const burnedPct = pctOfRows(enrichedRows.filter((row) => row.labels.includes("BURN")));
   const lockerPct = pctOfRows(enrichedRows.filter((row) => row.labels.includes("LOCKER")));
   const excludedContractPct = pctOfRows(enrichedRows.filter((row) => row.isContract));
+  const relatedWalletPct = pctOfRows(enrichedRows.filter((row) => row.labels.includes("RELATED_WALLET")));
   const top1Pct = pctOfTopN(1);
   const top5Pct = pctOfTopN(5);
   const top10Pct = pctOfTopN(10);
@@ -354,7 +359,8 @@ async function discoverBlockscoutHolderConcentration(
     ...(top10Pct >= 60 ? ["TOP_10_WALLETS_CRITICAL"] : []),
     ...(top10Pct >= 35 && top10Pct < 60 ? ["TOP_10_WALLETS_HIGH"] : []),
     ...(deployerPct !== null && deployerPct >= 5 ? ["DEPLOYER_BALANCE_HIGH"] : []),
-    ...(ownerPct !== null && ownerPct >= 5 ? ["OWNER_BALANCE_HIGH"] : [])
+    ...(ownerPct !== null && ownerPct >= 5 ? ["OWNER_BALANCE_HIGH"] : []),
+    ...(relatedWalletPct >= 5 ? ["RELATED_WALLET_BALANCE_HIGH"] : [])
   ];
 
   const concentration: HolderConcentration = {
@@ -369,6 +375,7 @@ async function discoverBlockscoutHolderConcentration(
     burnedPct,
     lockerPct,
     excludedContractPct,
+    relatedWalletPct,
     rawConcentration: {
       top1Pct: pctOfTopNRaw(1),
       top5Pct: pctOfTopNRaw(5),

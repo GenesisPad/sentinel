@@ -342,6 +342,7 @@ export type RelatedWalletEdgeType =
   | "FUNDED_BY"
   | "DEPLOYED_BY"
   | "OWNED_BY"
+  | "PREVIOUSLY_OWNED_BY"
   | "SHARED_BYTECODE"
   | "TRANSFERRED_SUPPLY_TO";
 

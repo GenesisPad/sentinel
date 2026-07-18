@@ -9,17 +9,47 @@ export interface WalletClusteringProvider {
   findFundingWallet(input: {
     chainId: number;
     address: `0x${string}`;
+    /** Human-readable role of `address` (e.g. "deployer", "current owner", "previous owner"),
+     * folded into the returned edge's evidence text so it's clear which tracked wallet this
+     * funding trace belongs to. */
+    roleLabel: string;
   }): Promise<RelatedWalletEdge | null>;
   findSupplyTransfers(input: {
     adapter: ChainAdapter;
     chainId: number;
     tokenAddress: `0x${string}`;
-    deployerAddress: `0x${string}`;
+    /** The wallet whose outgoing Transfer events are scanned — the deployer, the current
+     * owner, or a previous owner recovered from an ownership-renouncement log. */
+    fromAddress: `0x${string}`;
+    roleLabel: string;
     fromBlock: bigint;
     toBlock: bigint;
     totalSupply: string | null;
   }): Promise<RelatedWalletEdge[]>;
+  /**
+   * Recovers the wallet that renounced ownership, when the current owner is a burn/zero
+   * address, by scanning `OwnershipTransferred` logs for the renouncement transaction. Returns
+   * null when no renouncement log is found (e.g. ownership was never set, or the contract
+   * doesn't emit the standard event) — never a guess.
+   */
+  findPreviousOwner(input: {
+    adapter: ChainAdapter;
+    chainId: number;
+    tokenAddress: `0x${string}`;
+    fromBlock: bigint;
+    toBlock: bigint;
+  }): Promise<PreviousOwnerResult | null>;
 }
+
+export interface PreviousOwnerResult {
+  address: `0x${string}`;
+  blockNumber: string | null;
+}
+
+const burnOrZeroAddresses = new Set([
+  "0x0000000000000000000000000000000000000000",
+  "0x000000000000000000000000000000000000dead"
+]);
 
 /**
  * Real, evidence-backed wallet-relationship edges (Milestone 6) — never inferred from timing
@@ -33,21 +63,31 @@ const transferEvent = parseAbiItem(
 );
 const transferTopic = toEventSelector(transferEvent);
 
+const ownershipTransferredEvent = parseAbiItem(
+  "event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)"
+);
+const ownershipTransferredTopic = toEventSelector(ownershipTransferredEvent);
+
 export interface SupplyTransferScanInput {
   tokenAddress: `0x${string}`;
-  deployerAddress: `0x${string}`;
+  /** The wallet whose outgoing Transfer events are scanned — deployer, current owner, or a
+   * recovered previous owner. */
+  fromAddress: `0x${string}`;
+  /** Human-readable role of `fromAddress`, folded into the returned edges' evidence text. */
+  roleLabel: string;
   fromBlock: bigint;
   toBlock: bigint;
   totalSupply: string | null;
 }
 
 /**
- * Scans ERC20 Transfer events from the deployer address within [fromBlock, toBlock] and
- * reports recipients that received at least 1% of total supply (or any nonzero amount when
- * total supply isn't known) as TRANSFERRED_SUPPLY_TO edges. Bounded by the caller-supplied
- * block range — does not scan beyond it.
+ * Scans ERC20 Transfer events from `input.fromAddress` within [fromBlock, toBlock] and reports
+ * recipients that received at least 1% of total supply (or any nonzero amount when total
+ * supply isn't known) as TRANSFERRED_SUPPLY_TO edges. Bounded by the caller-supplied block
+ * range — does not scan beyond it. Works for any tracked wallet (deployer, current owner, or a
+ * previous owner recovered from a renouncement log), not only the deployer.
  */
-export async function findSupplyTransfersFromDeployer(
+export async function findSupplyTransfersFrom(
   adapter: ChainAdapter,
   input: SupplyTransferScanInput,
   options: { minSupplyPctThreshold?: number; maxEdges?: number } = {}
@@ -69,7 +109,7 @@ export async function findSupplyTransfersFromDeployer(
       address: input.tokenAddress,
       fromBlock: input.fromBlock,
       toBlock: input.toBlock,
-      topics: [transferTopic, addressToTopic(input.deployerAddress)]
+      topics: [transferTopic, addressToTopic(input.fromAddress)]
     });
 
     const edges: RelatedWalletEdge[] = [];
@@ -100,8 +140,8 @@ export async function findSupplyTransfersFromDeployer(
         confidence: "HIGH",
         evidence:
           pct !== null
-            ? `Deployer transferred ~${pct.toFixed(1)}% of total supply to this address (block ${log.blockNumber ?? "unknown"}).`
-            : `Deployer transferred ${amount.toString()} raw token units to this address (block ${log.blockNumber ?? "unknown"}); total supply was unavailable to compute a percentage.`,
+            ? `This token's ${input.roleLabel} transferred ~${pct.toFixed(1)}% of total supply to this address (block ${log.blockNumber ?? "unknown"}).`
+            : `This token's ${input.roleLabel} transferred ${amount.toString()} raw token units to this address (block ${log.blockNumber ?? "unknown"}); total supply was unavailable to compute a percentage.`,
         source: "erc20-transfer-log-scan",
         ...(log.blockNumber !== null && log.blockNumber !== undefined
           ? { firstObservedBlock: log.blockNumber.toString() }
@@ -114,6 +154,51 @@ export async function findSupplyTransfersFromDeployer(
     return edges;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Recovers the wallet that renounced ownership by scanning `OwnershipTransferred` logs for the
+ * transaction whose `newOwner` is a known burn/zero address, and returning that log's
+ * `previousOwner`. Reports the most recent such renouncement in range. Returns null when no
+ * renouncement log is found — e.g. the contract never renounced, or doesn't emit the standard
+ * OpenZeppelin `Ownable` event — never a guess.
+ */
+export async function findPreviousOwnerFromRenouncement(
+  adapter: ChainAdapter,
+  input: { tokenAddress: `0x${string}`; fromBlock: bigint; toBlock: bigint }
+): Promise<PreviousOwnerResult | null> {
+  try {
+    const logs = await adapter.getLogs({
+      address: input.tokenAddress,
+      fromBlock: input.fromBlock,
+      toBlock: input.toBlock,
+      topics: [ownershipTransferredTopic]
+    });
+
+    let latest: PreviousOwnerResult | null = null;
+    let latestBlock = -1n;
+    for (const log of logs) {
+      const previousOwnerTopic = log.topics[1];
+      const newOwnerTopic = log.topics[2];
+      if (log.topics.length < 3 || !previousOwnerTopic || !newOwnerTopic) continue;
+
+      const newOwner = topicToAddress(newOwnerTopic);
+      if (!burnOrZeroAddresses.has(newOwner.toLowerCase())) continue;
+
+      const previousOwner = topicToAddress(previousOwnerTopic);
+      if (burnOrZeroAddresses.has(previousOwner.toLowerCase())) continue;
+
+      const block = log.blockNumber ?? 0n;
+      if (block >= latestBlock) {
+        latestBlock = block;
+        latest = { address: previousOwner, blockNumber: log.blockNumber?.toString() ?? null };
+      }
+    }
+
+    return latest;
+  } catch {
+    return null;
   }
 }
 
@@ -131,7 +216,8 @@ export interface FundingWalletLookupConfig {
  */
 export async function findFundingWallet(
   address: `0x${string}`,
-  config: FundingWalletLookupConfig
+  config: FundingWalletLookupConfig,
+  roleLabel = "this address"
 ): Promise<RelatedWalletEdge | null> {
   const maxPages = config.maxPages ?? 5;
   let url = `${config.apiBaseUrl}/addresses/${address}/transactions?filter=to`;
@@ -178,7 +264,7 @@ export async function findFundingWallet(
     type: "FUNDED_BY",
     address: earliestFound.from,
     confidence: "MEDIUM",
-    evidence: `Earliest inbound native-value transfer found within the first ${maxPages} page(s) of this address's transaction history came from this wallet. Transfers further back in history were not searched.`,
+    evidence: `Earliest inbound native-value transfer found within the first ${maxPages} page(s) of the ${roleLabel}'s transaction history came from this wallet. Transfers further back in history were not searched.`,
     source: "blockscout-transaction-history",
     ...(earliestFound.blockNumber ? { firstObservedBlock: earliestFound.blockNumber } : {})
   };
@@ -204,24 +290,41 @@ export function createBlockscoutWalletClusteringProvider(
     id: "blockscout-wallet-clustering",
     supportsChain: (chainId) => chainId === config.chainId,
 
-    async findFundingWallet({ chainId, address }) {
+    async findFundingWallet({ chainId, address, roleLabel }) {
       if (chainId !== config.chainId) {
         return null;
       }
-      return findFundingWallet(address, { apiBaseUrl: config.apiBaseUrl });
+      return findFundingWallet(address, { apiBaseUrl: config.apiBaseUrl }, roleLabel);
     },
 
-    async findSupplyTransfers({ adapter, chainId, tokenAddress, deployerAddress, fromBlock, toBlock, totalSupply }) {
+    async findSupplyTransfers({
+      adapter,
+      chainId,
+      tokenAddress,
+      fromAddress,
+      roleLabel,
+      fromBlock,
+      toBlock,
+      totalSupply
+    }) {
       if (chainId !== config.chainId) {
         return [];
       }
-      return findSupplyTransfersFromDeployer(adapter, {
+      return findSupplyTransfersFrom(adapter, {
         tokenAddress,
-        deployerAddress,
+        fromAddress,
+        roleLabel,
         fromBlock,
         toBlock,
         totalSupply
       });
+    },
+
+    async findPreviousOwner({ chainId, adapter, tokenAddress, fromBlock, toBlock }) {
+      if (chainId !== config.chainId) {
+        return null;
+      }
+      return findPreviousOwnerFromRenouncement(adapter, { tokenAddress, fromBlock, toBlock });
     }
   };
 }

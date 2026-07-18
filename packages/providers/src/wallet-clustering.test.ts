@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, parseAbiItem } from "viem";
 import type { ChainAdapter } from "@genesis-sentinel/chain-adapters";
-import { findFundingWallet, findSupplyTransfersFromDeployer } from "./wallet-clustering.js";
+import {
+  findFundingWallet,
+  findPreviousOwnerFromRenouncement,
+  findSupplyTransfersFrom
+} from "./wallet-clustering.js";
 
 const tokenAddress = "0x0000000000000000000000000000000000000001" as const;
 const deployerAddress = "0x0000000000000000000000000000000000000002" as const;
@@ -33,7 +37,7 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-describe("findSupplyTransfersFromDeployer", () => {
+describe("findSupplyTransfersFrom", () => {
   it("reports a TRANSFERRED_SUPPLY_TO edge for a transfer above the threshold", async () => {
     const transferEvent = parseAbiItem(
       "event Transfer(address indexed from, address indexed to, uint256 value)"
@@ -56,9 +60,10 @@ describe("findSupplyTransfersFromDeployer", () => {
       }
     ]);
 
-    const edges = await findSupplyTransfersFromDeployer(adapter, {
+    const edges = await findSupplyTransfersFrom(adapter, {
       tokenAddress,
-      deployerAddress,
+      fromAddress: deployerAddress,
+      roleLabel: "deployer",
       fromBlock: 0n,
       toBlock: 100n,
       totalSupply: "1000"
@@ -94,9 +99,10 @@ describe("findSupplyTransfersFromDeployer", () => {
       }
     ]);
 
-    const edges = await findSupplyTransfersFromDeployer(adapter, {
+    const edges = await findSupplyTransfersFrom(adapter, {
       tokenAddress,
-      deployerAddress,
+      fromAddress: deployerAddress,
+      roleLabel: "deployer",
       fromBlock: 0n,
       toBlock: 100n,
       totalSupply: "1000"
@@ -110,9 +116,10 @@ describe("findSupplyTransfersFromDeployer", () => {
       throw new Error("rpc failure");
     });
 
-    const edges = await findSupplyTransfersFromDeployer(adapter, {
+    const edges = await findSupplyTransfersFrom(adapter, {
       tokenAddress,
-      deployerAddress,
+      fromAddress: deployerAddress,
+      roleLabel: "deployer",
       fromBlock: 0n,
       toBlock: 100n,
       totalSupply: "1000"
@@ -160,5 +167,80 @@ describe("findFundingWallet", () => {
       address: recipientAddress,
       firstObservedBlock: "50"
     });
+  });
+});
+
+describe("findPreviousOwnerFromRenouncement", () => {
+  const ownershipTransferredEvent = parseAbiItem(
+    "event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)"
+  );
+  const burnAddress = "0x000000000000000000000000000000000000dead" as const;
+
+  it("recovers the previous owner from a renouncement log", async () => {
+    const topics = encodeEventTopics({
+      abi: [ownershipTransferredEvent],
+      eventName: "OwnershipTransferred",
+      args: { previousOwner: deployerAddress, newOwner: burnAddress }
+    });
+
+    const adapter = stubAdapter(() => [
+      {
+        address: tokenAddress,
+        blockNumber: 200n,
+        transactionHash: "0x0000000000000000000000000000000000000000000000000000000000000002",
+        logIndex: 0,
+        topics,
+        data: "0x"
+      }
+    ]);
+
+    const result = await findPreviousOwnerFromRenouncement(adapter, {
+      tokenAddress,
+      fromBlock: 0n,
+      toBlock: 200n
+    });
+
+    expect(result).toEqual({ address: deployerAddress, blockNumber: "200" });
+  });
+
+  it("returns null when no ownership transfer targeted a burn/zero address", async () => {
+    const topics = encodeEventTopics({
+      abi: [ownershipTransferredEvent],
+      eventName: "OwnershipTransferred",
+      args: { previousOwner: deployerAddress, newOwner: recipientAddress }
+    });
+
+    const adapter = stubAdapter(() => [
+      {
+        address: tokenAddress,
+        blockNumber: 200n,
+        transactionHash: "0x0000000000000000000000000000000000000000000000000000000000000002",
+        logIndex: 0,
+        topics,
+        data: "0x"
+      }
+    ]);
+
+    const result = await findPreviousOwnerFromRenouncement(adapter, {
+      tokenAddress,
+      fromBlock: 0n,
+      toBlock: 200n
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the log fetch fails", async () => {
+    const adapter = stubAdapter(() => {
+      throw new Error("rpc failure");
+    });
+
+    const result = await findPreviousOwnerFromRenouncement(adapter, {
+      tokenAddress,
+      fromBlock: 0n,
+      toBlock: 200n
+    });
+
+    expect(result).toBeNull();
   });
 });

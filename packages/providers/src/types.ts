@@ -161,6 +161,11 @@ export interface HolderConcentration extends Record<string, unknown> {
   burnedPct: number;
   lockerPct: number;
   excludedContractPct: number;
+  /** Balance held at addresses Milestone 6 wallet-clustering evidence connects to the
+   * deployer/owner (excluding the deployer/owner addresses themselves, already covered by
+   * `deployerPct`/`ownerPct`) — surfaced separately, never merged into the top-N figures, so a
+   * split-supply pattern across "unrelated" wallets is still visible as connected. */
+  relatedWalletPct: number;
   suspiciousFlags: string[];
   /**
    * Same top-N percentages computed WITHOUT excluding burn/pool/contract addresses — i.e. what
@@ -182,6 +187,11 @@ export interface HolderProviderContext {
   deployerAddress?: `0x${string}` | null;
   ownerAddress?: `0x${string}` | null;
   liquidityPoolAddresses?: `0x${string}`[];
+  /** Addresses Milestone 6 wallet-clustering evidence connects to the deployer/owner (funding
+   * sources, supply recipients, a recovered previous owner, shared-bytecode deployments) —
+   * excludes the deployer/owner addresses themselves, which are already reported separately via
+   * `deployerPct`/`ownerPct`. */
+  relatedWalletAddresses?: `0x${string}`[];
 }
 
 export interface HolderProvider {

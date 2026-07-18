@@ -36,8 +36,24 @@ wallet, and `lockerPct` reports it as its own bucket (distinct from `burnedPct`)
 Still not implemented (deferred, tracked, not silently dropped): vesting-contract, bridge,
 centralized-exchange, treasury, router, and staking-contract classification (no verified
 address lists exist in this codebase for any of these categories — fabricating one would be
-worse than leaving holders unlabeled); fresh-wallet concentration; related-wallet
-clustering/edges with confidence and evidence (see Milestone 6, deployer/wallet intelligence).
+worse than leaving holders unlabeled; such wallets remain generically labeled `CONTRACT`, which
+is already excluded from wallet-only concentration via `excludedContractPct`); fresh-wallet
+concentration.
+
+## Milestone 6 connection: related-wallet clustering feeds concentration
+
+`HolderProviderContext.relatedWalletAddresses` (populated by
+`apps/worker/src/scan-worker.ts`'s `buildRelatedWalletEdges`, see ADR 0025/0027) passes every
+Milestone 6 wallet-clustering edge address into holder analysis, **excluding** the
+deployer/owner addresses themselves (already covered by `deployerPct`/`ownerPct`). Matching
+holder rows get a `RELATED_WALLET` label, and their combined balance is reported as
+`relatedWalletPct` — a real signal that a token's top holders include a previous owner, a
+funding source, a supply recipient, or a shared-bytecode redeployment the deployer/owner is
+connected to, rather than genuinely independent wallets. `relatedWalletPct` is additive
+information alongside the existing raw/adjusted top-N figures, never merged into them — a
+related wallet is still counted as an ordinary holder in `top1Pct`/`top10Pct` (it really does
+hold that balance), `relatedWalletPct` just flags that the holding is evidenced as connected.
+`RELATED_WALLET_BALANCE_HIGH` joins `suspiciousFlags` when `relatedWalletPct >= 5`.
 
 ## Future Sources
 
