@@ -1968,11 +1968,11 @@ function isZeroAddress(address: `0x${string}`): boolean {
 }
 
 function addressToTopic(address: `0x${string}`): Hex {
-  return `0x${address.toLowerCase().slice(2).padStart(64, "0")}` as Hex;
+  return `0x${address.toLowerCase().slice(2).padStart(64, "0")}`;
 }
 
 function poolIdToAddress(poolId: Hex): `0x${string}` {
-  return `0x${poolId.slice(2, 42)}` as `0x${string}`;
+  return `0x${poolId.slice(2, 42)}`;
 }
 
 function compact<T>(values: Array<T | null | undefined>): T[] {

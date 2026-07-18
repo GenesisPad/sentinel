@@ -1,10 +1,13 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
 
-const apiBaseUrl = process.env.SMOKE_API_BASE_URL ?? process.env.WEB_PUBLIC_API_BASE_URL;
+const apiBaseUrl =
+  process.env.SMOKE_API_BASE_URL ??
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  process.env.WEB_PUBLIC_API_BASE_URL;
 const webBaseUrl = process.env.SMOKE_WEB_BASE_URL;
 
 if (!apiBaseUrl) {
-  throw new Error("Set SMOKE_API_BASE_URL or WEB_PUBLIC_API_BASE_URL before running smoke tests.");
+  throw new Error("Set SMOKE_API_BASE_URL or NEXT_PUBLIC_API_BASE_URL before running smoke tests.");
 }
 
 const checks = [

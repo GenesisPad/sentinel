@@ -3,7 +3,6 @@ import ganache from "ganache";
 import {
   createPublicClient,
   createWalletClient,
-  encodeFunctionData,
   http,
   parseAbi,
   type Chain

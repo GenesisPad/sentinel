@@ -262,7 +262,7 @@ export function createViemChainAdapter(
       const logs = (await client.request({
         method: "eth_getLogs",
         params: [filter]
-      })) as RpcLogResult[];
+      })) as unknown as RpcLogResult[];
 
       return logs.map((log) => ({
         address: normalizeEvmAddress(log.address),
@@ -354,7 +354,7 @@ export function createViemChainAdapter(
 }
 
 function toRpcBlock(blockNumber: bigint): Hex {
-  return `0x${blockNumber.toString(16)}` as Hex;
+  return `0x${blockNumber.toString(16)}`;
 }
 
 function createClient(

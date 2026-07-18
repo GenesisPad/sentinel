@@ -4,6 +4,12 @@ import type { ChainAdapter } from "@genesis-sentinel/chain-adapters";
 import type { ScanRepository } from "@genesis-sentinel/database";
 import { processScanJob } from "./scan-worker.js";
 
+function fetchUrl(input: string | URL | Request): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
 function createRepository() {
   const calls: string[] = [];
   const repository: ScanRepository = {
@@ -260,8 +266,8 @@ describe("scan worker orchestration", () => {
     const tokenAddress = "0x0000000000000000000000000000000000000001";
     const deployerAddress = "0x00000000000000000000000000000000000000d1";
     const ownerAddress = "0x00000000000000000000000000000000000000aa";
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = input.toString();
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
       const body = url.includes("/holders")
         ? {
             items: [
@@ -317,10 +323,10 @@ describe("scan worker orchestration", () => {
               }
             : { items: [] };
 
-      return new Response(JSON.stringify(body), {
+      return Promise.resolve(new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" }
-      });
+      }));
     });
 
     await processScanJob(
@@ -353,8 +359,8 @@ describe("scan worker orchestration", () => {
     const tokenAddress = "0x0000000000000000000000000000000000000001";
     const pairAddress = "0x00000000000000000000000000000000000000f1";
     const traceCalls: Array<Parameters<NonNullable<ChainAdapter["traceCall"]>>[0]> = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = input.toString();
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
       const body = url.includes("/holders")
         ? {
             items: [
@@ -381,10 +387,10 @@ describe("scan worker orchestration", () => {
               ? { is_verified: true }
               : { items: [] };
 
-      return new Response(JSON.stringify(body), {
+      return Promise.resolve(new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" }
-      });
+      }));
     });
 
     await processScanJob(
@@ -451,8 +457,8 @@ describe("scan worker orchestration", () => {
     const tokenAddress = "0x0000000000000000000000000000000000000001";
     const poolAddress = "0x00000000000000000000000000000000000000f3";
     const wethAddress = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = input.toString();
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
       const body = url.includes("/holders")
         ? { items: [] }
         : url.includes(`/tokens/${wethAddress}`)
@@ -469,10 +475,10 @@ describe("scan worker orchestration", () => {
               ? { is_verified: true }
               : { items: [] };
 
-      return new Response(JSON.stringify(body), {
+      return Promise.resolve(new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" }
-      });
+      }));
     });
 
     await processScanJob(
@@ -561,8 +567,8 @@ describe("scan worker orchestration", () => {
         0
       ]
     );
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = input.toString();
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
       const body = url.includes("/holders")
         ? { items: [] }
         : url.includes("/tokens/")
@@ -578,10 +584,10 @@ describe("scan worker orchestration", () => {
             ? { is_verified: true }
             : { items: [] };
 
-      return new Response(JSON.stringify(body), {
+      return Promise.resolve(new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" }
-      });
+      }));
     });
 
     await processScanJob(
@@ -646,8 +652,8 @@ describe("scan worker orchestration", () => {
     const { repository, calls } = createRepository();
     const tokenAddress = "0x0000000000000000000000000000000000000001";
     const pairAddress = "0x00000000000000000000000000000000000000f1";
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = input.toString();
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
       const body = url.includes("/holders")
         ? {
             items: [
@@ -674,10 +680,10 @@ describe("scan worker orchestration", () => {
               ? { is_verified: true }
               : { items: [] };
 
-      return new Response(JSON.stringify(body), {
+      return Promise.resolve(new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" }
-      });
+      }));
     });
 
     await processScanJob(

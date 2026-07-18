@@ -11,6 +11,7 @@
   },
   "scripts": {
     "build": "pnpm prisma:generate && tsc -p tsconfig.json",
+    "prisma:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:validate": "prisma validate --schema prisma/schema.prisma",
     "test": "vitest run --config ../../vitest.config.ts",

@@ -562,7 +562,7 @@ function rememberTelegramCallbackScanId(
   registry.scanIdsByKey.set(key, scanId);
 
   if (registry.scanIdsByKey.size > 1_000) {
-    const oldest = registry.scanIdsByKey.keys().next().value as string | undefined;
+    const oldest = registry.scanIdsByKey.keys().next().value;
     if (oldest) {
       const oldestScanId = registry.scanIdsByKey.get(oldest);
       registry.scanIdsByKey.delete(oldest);

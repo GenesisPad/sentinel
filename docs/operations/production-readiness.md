@@ -20,7 +20,8 @@ Use `.env.example` as the base and set production values:
 - `DATABASE_URL`
 - `REDIS_URL`
 - `ROBINHOOD_RPC_URL`
-- `WEB_PUBLIC_API_BASE_URL`
+- `NEXT_PUBLIC_API_BASE_URL`
+- `NEXT_PUBLIC_SITE_URL`
 - `API_RATE_LIMIT_MAX`
 - `API_RATE_LIMIT_TIME_WINDOW`
 - `WORKER_CONCURRENCY`
@@ -31,6 +32,13 @@ Use `.env.example` as the base and set production values:
 - `TELEGRAM_SCAN_BURST_WINDOW_SECONDS`
 
 Do not use the public fallback RPC in production. The chain adapter rejects that path when `NODE_ENV=production`.
+
+GitHub Actions production deployment requires these repository or organization secrets:
+
+- `CONTABO_HOST`
+- `CONTABO_USER`
+- `CONTABO_SSH_KEY`
+- `CONTABO_PORT`, only if SSH does not use port 22
 
 ## Deployment Checks
 

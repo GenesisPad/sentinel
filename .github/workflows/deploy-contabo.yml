@@ -1,0 +1,226 @@
+name: Deploy to Contabo
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - CI
+    branches:
+      - main
+    types:
+      - completed
+
+concurrency:
+  group: sentinel-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Check deployment secrets
+        env:
+          CONTABO_HOST: ${{ secrets.CONTABO_HOST }}
+          CONTABO_USER: ${{ secrets.CONTABO_USER }}
+          CONTABO_SSH_KEY: ${{ secrets.CONTABO_SSH_KEY }}
+        run: |
+          set -e
+          missing=0
+          for key in CONTABO_HOST CONTABO_USER CONTABO_SSH_KEY; do
+            if [ -z "${!key}" ]; then
+              echo "Missing GitHub secret: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add the missing secrets to GenesisPad/sentinel before production deployment can run."
+            exit 1
+          fi
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.CONTABO_HOST }}
+          username: ${{ secrets.CONTABO_USER }}
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          port: ${{ secrets.CONTABO_PORT || '22' }}
+          timeout: 30s
+          command_timeout: 30m
+          script: |
+            set -e
+
+            APP_ROOT=/var/www/genesis-sentinel
+            RELEASE_ROOT="$APP_ROOT/releases"
+            SHARED_ROOT="$APP_ROOT/shared"
+            RELEASE_ID="${{ github.sha }}"
+            RELEASE_DIR="$RELEASE_ROOT/$RELEASE_ID"
+            CURRENT_LINK="$APP_ROOT/current"
+            ENV_FILE="$SHARED_ROOT/.env.production"
+            REPO_URL="https://github.com/GenesisPad/sentinel.git"
+
+            require_env_key() {
+              key="$1"
+              if ! grep -q "^${key}=" "$ENV_FILE"; then
+                echo "Missing required env key $key in $ENV_FILE"
+                exit 1
+              fi
+            }
+
+            mkdir -p "$RELEASE_ROOT" "$SHARED_ROOT"
+
+            if [ ! -f "$ENV_FILE" ]; then
+              cat > "$ENV_FILE" <<'ENV'
+            NODE_ENV=production
+            LOG_LEVEL=info
+            API_HOST=127.0.0.1
+            API_PORT=4301
+            API_CORS_ORIGIN=https://sentinel.genesispad.app
+            API_RATE_LIMIT_MAX=120
+            API_RATE_LIMIT_TIME_WINDOW=1 minute
+            WORKER_CONCURRENCY=2
+            NEXT_PUBLIC_API_BASE_URL=/v1
+            NEXT_PUBLIC_SITE_URL=https://sentinel.genesispad.app
+            DATABASE_URL=
+            REDIS_URL=
+            ROBINHOOD_RPC_URL=
+            ROBINHOOD_FALLBACK_RPC_URLS=
+            TELEGRAM_BOT_TOKEN=
+            TELEGRAM_WEBHOOK_SECRET=
+            TELEGRAM_SCAN_COOLDOWN_SECONDS=15
+            TELEGRAM_SCAN_BURST_LIMIT=5
+            TELEGRAM_SCAN_BURST_WINDOW_SECONDS=300
+            SIMULATION_FORK_ENABLED=false
+            SIMULATION_FORK_TIMEOUT_MS=30000
+            SIMULATION_FORK_NATIVE_AMOUNT_WEI=1000000000000000
+            SENTRY_DSN=
+            ENV
+              echo "Created $ENV_FILE. Fill DATABASE_URL, REDIS_URL, and ROBINHOOD_RPC_URL, then rerun deploy."
+              exit 1
+            fi
+
+            for key in NODE_ENV API_HOST API_PORT API_CORS_ORIGIN DATABASE_URL REDIS_URL ROBINHOOD_RPC_URL NEXT_PUBLIC_API_BASE_URL NEXT_PUBLIC_SITE_URL; do
+              require_env_key "$key"
+            done
+
+            if grep -Eq '^(DATABASE_URL|REDIS_URL|ROBINHOOD_RPC_URL)=$' "$ENV_FILE"; then
+              echo "DATABASE_URL, REDIS_URL, and ROBINHOOD_RPC_URL must be populated in $ENV_FILE"
+              exit 1
+            fi
+
+            rm -rf "$RELEASE_DIR"
+            git clone --depth 1 --branch main "$REPO_URL" "$RELEASE_DIR"
+            ln -sfn "$ENV_FILE" "$RELEASE_DIR/.env.production"
+
+            cd "$RELEASE_DIR"
+            set -a
+            . "$ENV_FILE"
+            set +a
+
+            corepack prepare pnpm@11.7.0 --activate
+            pnpm install --frozen-lockfile
+            pnpm prisma:generate
+            pnpm --filter @genesis-sentinel/database prisma:deploy
+            pnpm --filter @genesis-sentinel/api... build
+            pnpm --filter @genesis-sentinel/worker... build
+            pnpm --filter @genesis-sentinel/web... build
+
+            if command -v pm2 >/dev/null 2>&1; then
+              pm2 delete genesis-sentinel-api || true
+              pm2 start "$RELEASE_DIR/apps/api/dist/server.js" --name genesis-sentinel-api --cwd "$RELEASE_DIR/apps/api" --update-env
+              pm2 delete genesis-sentinel-worker || true
+              pm2 start "$RELEASE_DIR/apps/worker/dist/index.js" --name genesis-sentinel-worker --cwd "$RELEASE_DIR/apps/worker" --update-env
+              pm2 delete genesis-sentinel-web || true
+              pm2 start "$RELEASE_DIR/apps/web/node_modules/next/dist/bin/next" --name genesis-sentinel-web --cwd "$RELEASE_DIR/apps/web" -- start -p 4300
+              pm2 save || true
+            else
+              pkill -f "apps/api/dist/server.js" || true
+              nohup node "$RELEASE_DIR/apps/api/dist/server.js" > "$APP_ROOT/api.log" 2>&1 &
+              pkill -f "apps/worker/dist/index.js" || true
+              nohup node "$RELEASE_DIR/apps/worker/dist/index.js" > "$APP_ROOT/worker.log" 2>&1 &
+              pkill -f "next start -p 4300" || true
+              cd "$RELEASE_DIR/apps/web"
+              nohup pnpm exec next start -p 4300 > "$APP_ROOT/web.log" 2>&1 &
+            fi
+
+            for i in $(seq 1 24); do
+              if curl -fsS "http://127.0.0.1:${API_PORT}/health" >/dev/null; then
+                api_ready=1
+                break
+              fi
+              sleep 5
+            done
+            if [ "${api_ready:-0}" != "1" ]; then
+              pm2 logs genesis-sentinel-api --nostream --lines 120 || true
+              exit 1
+            fi
+
+            for i in $(seq 1 24); do
+              if curl -fsS -H "Host: sentinel.genesispad.app" "http://127.0.0.1:4300/" | grep -q "Genesis Sentinel"; then
+                web_ready=1
+                break
+              fi
+              sleep 5
+            done
+            if [ "${web_ready:-0}" != "1" ]; then
+              pm2 logs genesis-sentinel-web --nostream --lines 120 || true
+              exit 1
+            fi
+
+            if command -v nginx >/dev/null 2>&1; then
+              cat > /etc/nginx/sites-available/genesis-sentinel <<'NGINX'
+            server {
+              listen 80;
+              listen [::]:80;
+              server_name sentinel.genesispad.app;
+
+              location /v1/ {
+                proxy_pass http://127.0.0.1:4301/v1/;
+                proxy_http_version 1.1;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+              }
+
+              location /telegram/ {
+                proxy_pass http://127.0.0.1:4301/telegram/;
+                proxy_http_version 1.1;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+              }
+
+              location / {
+                proxy_pass http://127.0.0.1:4300;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+              }
+            }
+            NGINX
+              ln -sfn /etc/nginx/sites-available/genesis-sentinel /etc/nginx/sites-enabled/genesis-sentinel
+              nginx -t
+              systemctl reload nginx
+
+              if command -v certbot >/dev/null 2>&1; then
+                certbot --nginx \
+                  --expand \
+                  --cert-name sentinel.genesispad.app \
+                  -d sentinel.genesispad.app \
+                  --non-interactive \
+                  --agree-tos \
+                  --register-unsafely-without-email \
+                  --keep-until-expiring \
+                  --redirect || true
+              fi
+            fi
+
+            ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
+            ls -1td "$RELEASE_ROOT"/*/ | tail -n +7 | xargs -r rm -rf
