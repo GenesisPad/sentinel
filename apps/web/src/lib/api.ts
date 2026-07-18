@@ -26,6 +26,10 @@ function withV1Prefix(value: string): string {
 
 const USE_FIXTURES = process.env.NEXT_PUBLIC_USE_FIXTURES === "true";
 
+if (USE_FIXTURES && process.env.NODE_ENV === "production") {
+  throw new Error("Fixture scan mode is disabled in production.");
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,

@@ -87,9 +87,8 @@ export const scanReportSchema = z.object({
   scanId: z.string(),
   status: z.enum(["queued", "running", "completed", "partial", "failed"]),
   token: tokenMetaSchema,
-  // null when the backend risk assessment is UNABLE_TO_VERIFY (no findings yet / scan not
-  // far enough along) — riskFromScore() already treats null as "Unable to Assess".
-  safetyScore: z.number().min(0).max(100).nullable(),
+  // null when the backend risk assessment is UNABLE_TO_ASSESS (no numeric assessment available).
+  riskScore: z.number().min(0).max(100).nullable(),
   scoreExplanation: z.string(),
   checks: z.object({
     critical: z.number(),
@@ -169,7 +168,7 @@ export const recentScanSchema = z.object({
   address: z.string(),
   name: z.string(),
   symbol: z.string(),
-  safetyScore: z.number(),
+  riskScore: z.number(),
   scannedAt: z.string()
 });
 

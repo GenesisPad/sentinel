@@ -18,9 +18,9 @@ Risk levels:
 - `MODERATE`
 - `HIGH`
 - `CRITICAL`
-- `UNABLE_TO_VERIFY`
+- `UNABLE_TO_ASSESS`
 
-`UNABLE_TO_VERIFY` must be available when evidence quality is insufficient. The product must not describe a token as safe.
+`UNABLE_TO_ASSESS` must be available when evidence quality is insufficient. The product must not describe a token as safe.
 
 ## Consequences
 

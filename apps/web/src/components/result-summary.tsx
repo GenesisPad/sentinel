@@ -17,7 +17,7 @@ import { ShareMenu } from "@/components/share-menu";
 
 /** Compact result shown inline on the homepage after a scan completes. */
 export function ResultSummary({ report, onFresh, freshBusy = false }: { report: ScanReport; onFresh?: () => void; freshBusy?: boolean }) {
-  const risk = riskFromScore(report.safetyScore);
+  const risk = riskFromScore(report.riskScore);
   const tokenPath = `/token/${report.token.chainId}/${report.token.address}`;
   const critical = sortFindings(report.findings).filter((f) => f.severity === "critical");
 
@@ -55,10 +55,10 @@ export function ResultSummary({ report, onFresh, freshBusy = false }: { report: 
         <TokenHeader token={report.token} size="lg" />
         <div>
           <div className="mb-2 flex items-center gap-3">
-            <span className="text-xs font-bold uppercase tracking-[0.12em] text-muted">Safety Score</span>
-            <RiskBadge score={report.safetyScore} size="sm" />
+            <span className="text-xs font-bold uppercase tracking-[0.12em] text-muted">Risk Score</span>
+            <RiskBadge score={report.riskScore} size="sm" />
           </div>
-          <ScoreGauge score={report.safetyScore} />
+          <ScoreGauge score={report.riskScore} />
         </div>
       </Card>
 

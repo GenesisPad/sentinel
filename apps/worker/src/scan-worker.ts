@@ -692,7 +692,7 @@ function createHolderConcentrationDetectorResult(input: {
         "The deployer address from explorer metadata was matched against the token holder list.",
       evidence: [evidence],
       recommendation:
-        "Require a clear vesting, lock, or team-wallet explanation before treating supply distribution as safe."
+        "Require a clear vesting, lock, or team-wallet explanation before treating supply distribution as low detected risk."
     });
   }
 

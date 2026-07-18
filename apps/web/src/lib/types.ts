@@ -163,8 +163,8 @@ export interface ScanReport {
   scanId: string;
   status: ScanResultStatus;
   token: TokenMeta;
-  /** 0 = maximum risk, 100 = safest. Higher is safer. null = unable to assess yet. */
-  safetyScore: number | null;
+  /** 0 = minimal detected risk, 100 = maximum detected risk. Higher score means greater risk. */
+  riskScore: number | null;
   scoreExplanation: string;
   checks: CheckSummary;
   stages: ScanStage[];
@@ -197,6 +197,6 @@ export interface RecentScan {
   address: string;
   name: string;
   symbol: string;
-  safetyScore: number;
+  riskScore: number;
   scannedAt: string;
 }

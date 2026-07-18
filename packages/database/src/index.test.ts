@@ -90,7 +90,7 @@ describe("database readiness", () => {
       address: "0x0000000000000000000000000000000000000001"
     });
     expect(scan.risk).toMatchObject({
-      status: "UNABLE_TO_VERIFY",
+      status: "UNABLE_TO_ASSESS",
       score: null
     });
     expect(scan.liquidity).toMatchObject({

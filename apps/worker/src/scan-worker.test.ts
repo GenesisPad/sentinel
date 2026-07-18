@@ -229,8 +229,7 @@ describe("scan worker orchestration", () => {
       "stage:SIMULATING_TRADES:SKIPPED",
       "state:SCORING",
       "stage:SCORING:RUNNING",
-      "risk:LOW:0",
-      "stage:SCORING:SUCCEEDED",
+      "stage:SCORING:SKIPPED",
       "state:PARTIALLY_COMPLETED"
     ]);
   });

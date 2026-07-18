@@ -27,9 +27,9 @@ Implemented routes:
 - `GET /v1/risk/:chainId/:address`
 - `POST /telegram/webhook`
 
-`GET /v1/scans/:scanId/result` returns persisted scan progress, findings, evidence, liquidity summary, holder summary, simulation records, and a risk snapshot. If scoring has not run, the risk snapshot returns `UNABLE_TO_VERIFY` and `score: null` rather than inventing a score.
+`GET /v1/scans/:scanId/result` returns persisted scan progress, findings, evidence, liquidity summary, holder summary, simulation records, and a risk snapshot. If scoring has not run, the risk snapshot returns `UNABLE_TO_ASSESS` and `score: null` rather than inventing a score.
 
-`GET /v1/risk/:chainId/:address` returns the latest persisted risk snapshot for a token address. In Stage 6 this endpoint is intentionally conservative: it reports persisted scores when available, otherwise it reports `UNABLE_TO_VERIFY`.
+`GET /v1/risk/:chainId/:address` returns the latest persisted risk snapshot for a token address. This endpoint is intentionally conservative: it reports persisted scores when available, otherwise it reports `UNABLE_TO_ASSESS`.
 
 `GET /v1/tokens/:chainId/:address` remains planned.
 

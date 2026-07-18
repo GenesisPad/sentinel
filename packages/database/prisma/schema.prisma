@@ -62,8 +62,10 @@ enum RiskCategory {
 enum RiskLevel {
   LOW
   MODERATE
+  ELEVATED
   HIGH
   CRITICAL
+  UNABLE_TO_ASSESS
   UNABLE_TO_VERIFY
 }
 

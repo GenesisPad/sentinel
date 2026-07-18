@@ -2,7 +2,7 @@
 
 Genesis Sentinel is a token-security intelligence platform for dangerous or malicious EVM token detection. The project is in early implementation: the monorepo foundation, durable evidence schema, Robinhood Chain adapter, scan orchestration, first evidence-backed detectors, and minimal API/web/Telegram interfaces are present.
 
-This product must never claim a token is safe. Reports should use language such as "no critical risks detected", "low detected risk", "unable to verify", or "simulation inconclusive" once real scanning exists.
+This product must never claim a token is safe. Reports should use language such as "no critical risks detected", "low detected risk", "unable to assess", or "simulation inconclusive".
 
 ## Workspace
 
@@ -64,19 +64,18 @@ Completed:
 Not yet implemented:
 
 - Full production scoring across simulations, liquidity, holders, and source evidence.
-- Trade simulations.
-- Live holder analysis.
-- Liquidity analysis.
+- Provider-neutral source, liquidity, holder, and market integrations beyond Robinhood Chain.
+- Broader trade simulation coverage beyond the current Robinhood Chain route/fork paths.
 - Public production scanner result completeness.
 - Public Telegram launch polish and moderation controls.
 
-Stage 7 note: detector findings can now produce a persisted risk assessment and category scores. Scoring is based only on implemented detector findings; scans without findings remain `UNABLE_TO_VERIFY` rather than being treated as broadly low risk.
+Stage 7 note: detector findings can now produce a persisted risk assessment and category scores. Scoring is based only on implemented detector findings; scans without findings remain `UNABLE_TO_ASSESS` rather than being treated as broadly low risk.
 
 Stage 8 note: scans now persist unsupported BUY, SELL, and TRANSFER simulation intents when no isolated simulation runner is configured. These records make missing simulation evidence visible without claiming trade safety, buyability, sellability, or tax behavior.
 
-Stage 9 note: scans now record `DISCOVERING_MARKETS` as an explicit skipped stage when no DEX discovery source is configured. Scan results include a liquidity section and can render persisted liquidity pools in the future without implying LP safety or depth today.
+Stage 9 note: Robinhood Chain scans can discover Uniswap V2/V3/V4 pools from configured on-chain sources. Empty or unsupported liquidity results still must not imply LP safety or depth.
 
-Stage 10 note: scans now record `ANALYZING_HOLDERS` as an explicit skipped stage when no holder index, bounded Transfer-log scanner, or cached holder snapshot source is configured. Scan results include a holder section and can render persisted holder snapshots in the future without implying concentration safety today.
+Stage 10 note: Robinhood Chain scans can build holder concentration snapshots from Blockscout holder data. Empty or unsupported holder results still must not imply distributed ownership.
 
 Stage 11 note: the repo now includes container definitions for the API, worker, and web apps, production runtime knobs for API rate limits and worker concurrency, a production compose template, smoke checks, and a deployment-readiness checklist. This supports private alpha deployment, not broad public production.
 

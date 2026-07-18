@@ -526,6 +526,7 @@ export function formatTelegramResultReply(result: ScanResultView): string {
     "",
     topRisksBlock,
     "",
+    result.risk.score === null ? null : "_Higher score means greater risk._",
     `${result.scan.state} · v${result.scan.scannerVersion}`,
     "_DYOR/NFA. Risk indicator, not a guarantee._"
   ]).filter((line, index, lines) => line !== "" || (lines[index - 1] !== "" && lines[index + 1] !== ""));
@@ -660,7 +661,7 @@ function severityRank(severity: SecurityFindingView["severity"]): number {
 function formatRiskLine(result: ScanResultView): string {
   return result.risk.score === null
     ? result.risk.level
-    : `${result.risk.level} | Score ${result.risk.score}/100`;
+    : `${result.risk.level} | Risk Score: ${result.risk.score}/100`;
 }
 
 function formatTokenLabel(result: ScanResultView): string {

@@ -27,7 +27,7 @@ Robinhood Chain is configured first. Additional EVM chains should be added as ch
 3. Worker resolves chain context, gathers evidence, runs detectors, persists findings, and computes risk.
 4. All interfaces read the same persisted scan result and evidence.
 
-Stage 6 adds minimal interfaces over the persisted scan result: web result pages, REST result/finding/risk endpoints, and Telegram `/scan`. Stage 7 adds detector-finding scoring. Stage 8 persists explicit unsupported simulation records for BUY, SELL, and TRANSFER intents until an isolated runner exists. Stage 9 adds an explicit liquidity discovery boundary and liquidity result section. Stage 10 adds an explicit holder analysis boundary and holder result section. Stage 11 adds deployment hardening for private alpha. Quick risk responses return persisted assessments when detector findings were scored and otherwise return `UNABLE_TO_VERIFY` with `score: null`.
+Stage 6 adds minimal interfaces over the persisted scan result: web result pages, REST result/finding/risk endpoints, and Telegram `/scan`. Stage 7 adds detector-finding scoring. Stage 8 adds simulation records and Robinhood Chain route/fork simulation paths where supported. Stage 9 adds Robinhood Chain Uniswap V2/V3/V4 liquidity discovery. Stage 10 adds Robinhood Chain holder concentration snapshots. Stage 11 adds deployment hardening for private alpha. Quick risk responses return persisted assessments when detector findings were scored and otherwise return `UNABLE_TO_ASSESS` with `score: null`.
 
 ## Security Posture
 
@@ -41,7 +41,5 @@ Stage 6 adds minimal interfaces over the persisted scan result: web result pages
 ## Remaining Implementation Targets
 
 - Full production scoring across simulations, liquidity, holders, and source evidence.
-- Live trade and transfer simulations.
-- Bounded on-chain liquidity discovery, reserve valuation, and LP ownership checks.
-- Live holder concentration analysis.
-- Source verification and explorer integrations.
+- Provider-neutral source, liquidity, holder, and market integrations beyond Robinhood Chain.
+- Broader trade and transfer simulation coverage beyond current Robinhood Chain route/fork paths.

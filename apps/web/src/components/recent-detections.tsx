@@ -33,7 +33,7 @@ export function RecentDetections() {
       ) : (
         <ul className="flex flex-col">
           {data.map((d) => {
-            const risk = riskFromScore(d.safetyScore);
+            const risk = riskFromScore(d.riskScore);
             const chain = CHAINS[d.chainId];
             return (
               <li key={`${d.chainId}-${d.address}`}>

@@ -1,4 +1,5 @@
 import { toFunctionSelector } from "viem";
+import { riskLevelForScore } from "@genesis-sentinel/shared";
 import type {
   CheckOutcome,
   FindingConfidence,
@@ -763,16 +764,7 @@ export function scoreFindings(
   scannerVersion: string
 ): ScoredRiskAssessment | null {
   if (findings.length === 0) {
-    return {
-      score: 0,
-      level: "LOW",
-      confidence: "LOW",
-      categoryScores: [],
-      scannerVersion,
-      scoringVersion: "0.1.0-finding-weighted",
-      explanation:
-        "No detector findings were persisted by the baseline contract checks. This limited score does not include live liquidity analysis, holder analysis, trade simulation, or source verification."
-    };
+    return null;
   }
 
   const categoryScores = uniqueCategories(findings).map((category) => {
@@ -801,7 +793,7 @@ export function scoreFindings(
     scannerVersion,
     scoringVersion,
     explanation:
-      "Score is derived only from persisted detector findings. Unimplemented simulations, liquidity analysis, holder analysis, and source verification are not treated as low risk."
+      "Risk Score is derived only from persisted detector findings. Unimplemented simulations, liquidity analysis, holder analysis, and source verification are not treated as low risk."
   };
 }
 
@@ -1075,22 +1067,6 @@ function findingWeight(finding: SecurityFinding): number {
   };
 
   return Math.round(severityWeight[finding.severity] * confidenceMultiplier[finding.confidence]);
-}
-
-function riskLevelForScore(score: number): ScoredRiskAssessment["level"] {
-  if (score >= 85) {
-    return "CRITICAL";
-  }
-
-  if (score >= 60) {
-    return "HIGH";
-  }
-
-  if (score >= 30) {
-    return "MODERATE";
-  }
-
-  return "LOW";
 }
 
 function strongestConfidence(confidences: FindingConfidence[]): FindingConfidence {

@@ -9,7 +9,7 @@ export function SiteFooter() {
       </span>
       <span>Evidence-based analysis</span>
       <span>No hype. Just the truth.</span>
-      <span className="text-primary">Your safety is our priority.</span>
+      <span className="text-primary">Evidence first, no guarantees.</span>
     </footer>
   );
 }

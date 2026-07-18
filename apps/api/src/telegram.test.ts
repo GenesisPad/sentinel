@@ -257,7 +257,8 @@ describe("telegram scan helpers", () => {
     const reply = formatTelegramResultReply(result);
 
     expect(reply).toContain("Example Token ($EXT)");
-    expect(reply).toContain("HIGH | Score 60/100");
+    expect(reply).toContain("HIGH | Risk Score: 60/100");
+    expect(reply).toContain("Higher score means greater risk");
     expect(reply).not.toContain("Not simulated yet");
     expect(reply).toContain("Mint capability surface detected");
     expect(reply.toLowerCase()).not.toContain("safe");
@@ -314,8 +315,8 @@ describe("telegram scan helpers", () => {
         chainId: 4663,
         address: "0x0000000000000000000000000000000000000001",
         scannerVersion: "0.1.0-foundation",
-        status: "UNABLE_TO_VERIFY",
-        level: "UNABLE_TO_VERIFY",
+        status: "UNABLE_TO_ASSESS",
+        level: "UNABLE_TO_ASSESS",
         score: null,
         confidence: "LOW",
         categoryScores: [],

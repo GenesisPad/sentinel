@@ -294,16 +294,10 @@ describe("source-code risk detector", () => {
 });
 
 describe("risk scoring", () => {
-  it("creates a limited baseline score when no detector findings are present", () => {
+  it("returns no numeric assessment when no detector findings are present", () => {
     const assessment = scoreFindings([], "0.1.0-foundation");
 
-    expect(assessment).toMatchObject({
-      score: 0,
-      level: "LOW",
-      confidence: "LOW",
-      categoryScores: []
-    });
-    expect(assessment?.explanation).toContain("limited score");
+    expect(assessment).toBeNull();
   });
 
   it("scores detected findings without claiming broad safety", async () => {

@@ -40,12 +40,12 @@ export function ScoreGauge({
         <>
           <div
             className="relative mt-3 h-2.5 rounded-md"
-            style={{ background: "linear-gradient(90deg,#f0483e,#ff8a3d 30%,#f5c518 55%,#37d67a)" }}
+            style={{ background: "linear-gradient(90deg,#37d67a,#f5c518 30%,#ff8a3d 60%,#f0483e)" }}
             role="meter"
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={score}
-            aria-label={`Safety score ${score} of 100. ${risk.label}. Higher is safer.`}
+            aria-label={`Risk Score ${score} of 100. ${risk.label}. Higher score means greater risk.`}
           >
             <span
               aria-hidden
@@ -60,12 +60,12 @@ export function ScoreGauge({
           </div>
           {showScale ? (
             <div className="mt-1.5 flex justify-between text-[11px] text-faint" aria-hidden>
-              <span>0 Critical</span>
-              <span>50 High</span>
-              <span>100 Low</span>
+              <span>0 Low</span>
+              <span>50 Elevated</span>
+              <span>100 Critical</span>
             </div>
           ) : null}
-          <p className="mt-1.5 text-xs text-muted">Higher score means safer</p>
+          <p className="mt-1.5 text-xs text-muted">Higher score means greater risk</p>
         </>
       ) : (
         <p className="mt-2 max-w-xl text-sm text-muted">

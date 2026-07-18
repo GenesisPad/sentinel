@@ -326,14 +326,14 @@ function scoreExplanation(view: ScanResultView): string {
 
 export function mapResultToReport(view: ScanResultView): ScanReport {
   const chainId = chainIdFor(view.scan.chainId);
-  const safetyScore = view.risk.score == null ? null : 100 - view.risk.score;
+  const riskScore = view.risk.score;
   const token = deriveTokenMeta(view, chainId, view.scan.address);
 
   return {
     scanId: view.scan.scanId,
     status: mapStateToStatus(view.scan.state),
     token,
-    safetyScore,
+    riskScore,
     scoreExplanation: scoreExplanation(view),
     checks: {
       critical: countBySeverity(view.findings, "critical"),

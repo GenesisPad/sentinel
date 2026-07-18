@@ -11,8 +11,8 @@ describe("api foundation", () => {
     chainId: scan.chainId,
     address: scan.address,
     scannerVersion: scan.scannerVersion,
-    status: "UNABLE_TO_VERIFY",
-    level: "UNABLE_TO_VERIFY",
+    status: "UNABLE_TO_ASSESS",
+    level: "UNABLE_TO_ASSESS",
     score: null,
     confidence: "LOW",
     categoryScores: [],
@@ -240,7 +240,7 @@ describe("api foundation", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json<ScanResultView>().risk).toMatchObject({
-      status: "UNABLE_TO_VERIFY",
+      status: "UNABLE_TO_ASSESS",
       score: null
     });
   });
@@ -261,7 +261,7 @@ describe("api foundation", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json<RiskSnapshot>()).toMatchObject({
-      level: "UNABLE_TO_VERIFY",
+      level: "UNABLE_TO_ASSESS",
       score: null
     });
   });

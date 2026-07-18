@@ -43,12 +43,12 @@ Stage 6 adds read interfaces over the persisted lifecycle:
 - `GET /v1/risk/:chainId/:address` returns the latest persisted risk snapshot for a token.
 - Web and Telegram scan submission use the same API application service and idempotent queue path.
 
-When no `RiskAssessment` exists, Stage 6 reports `UNABLE_TO_VERIFY` and a null score. It does not treat missing scoring as low risk.
+When no `RiskAssessment` exists, public interfaces report `UNABLE_TO_ASSESS` and a null score. They do not treat missing scoring as low risk.
 
 Stage 7 adds the `SCORING` worker stage after `ANALYZING_CONTRACT`.
 
 - If detector findings exist, the worker persists a versioned `RiskAssessment` and `CategoryScore` records.
-- If no detector findings exist, the worker marks `SCORING` as `SKIPPED` and public interfaces continue to report `UNABLE_TO_VERIFY`.
+- If no detector findings exist, the worker marks `SCORING` as `SKIPPED` and public interfaces continue to report `UNABLE_TO_ASSESS`.
 - The scan remains `PARTIALLY_COMPLETED` because simulations, liquidity discovery, holder analysis, and source verification are still incomplete.
 
 Stage 8 adds the `SIMULATING_TRADES` worker stage between contract analysis and scoring.
@@ -60,14 +60,10 @@ Stage 8 adds the `SIMULATING_TRADES` worker stage between contract analysis and 
 
 Stage 9 adds the `DISCOVERING_MARKETS` worker stage between contract analysis and simulations.
 
-- Until a DEX factory, subgraph, explorer, or curated market source is configured, the worker marks `DISCOVERING_MARKETS` as `SKIPPED`.
-- Scan results include a liquidity summary.
-- Empty liquidity results in Stage 9 mean discovery is unsupported, not that no liquidity exists.
-- Persisted `LiquidityPool` rows are rendered when available, but LP ownership, reserves, locks, and depth are not verified yet.
+- Robinhood Chain scans discover configured Uniswap V2/V3/V4 pools and persist `LiquidityPool` rows when available.
+- Unsupported or empty liquidity results mean discovery could not produce pool evidence, not that no liquidity exists.
 
 Stage 10 adds the `ANALYZING_HOLDERS` worker stage between market discovery and simulations.
 
-- Until a holder index, bounded Transfer-log scanner, or cached holder snapshot source is configured, the worker marks `ANALYZING_HOLDERS` as `SKIPPED`.
-- Scan results include a holder summary.
-- Empty holder results in Stage 10 mean analysis is unsupported, not that ownership is distributed.
-- Persisted `HolderSnapshot` rows are rendered when available, but concentration, exchange attribution, burn addresses, and contract-controlled holder behavior are not verified yet.
+- Robinhood Chain scans build concentration snapshots from Blockscout holder data when token supply and holder rows are available.
+- Unsupported or empty holder results mean no holder evidence was produced, not that ownership is distributed.

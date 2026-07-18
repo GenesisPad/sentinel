@@ -28,11 +28,12 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { chainId, address } = await params;
   const report = await load(chainId, address);
   if (!report) return { title: "Token not found" };
-  const risk = riskFromScore(report.safetyScore);
+  const risk = riskFromScore(report.riskScore);
   const chain = CHAINS[report.token.chainId];
   const displayName = report.token.name ?? shortAddress(report.token.address);
   const symbolSuffix = report.token.symbol ? ` ($${report.token.symbol})` : "";
-  const scoreText = report.safetyScore != null ? `safety score ${report.safetyScore}/100` : "safety score unavailable";
+  const scoreText =
+    report.riskScore != null ? `Risk Score: ${report.riskScore}/100` : "Risk Score unavailable";
   const title = `${displayName}${symbolSuffix} - ${risk.label}`;
   const description = `${displayName} on ${chain.label}: ${scoreText} (${risk.label}). ${report.scoreExplanation}`;
   const canonical = `/token/${report.token.chainId}/${report.token.address}`;

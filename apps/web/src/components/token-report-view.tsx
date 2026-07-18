@@ -131,8 +131,8 @@ function TraderSections({ report }: { report: ScanReport }) {
       <Section id="risk" title="Risk overview">
         <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="text-xs font-bold uppercase tracking-[0.14em] text-muted">Detected safety</div>
-            <div className="mt-1.5"><RiskBadge score={report.safetyScore} size="lg" /></div>
+            <div className="text-xs font-bold uppercase tracking-[0.14em] text-muted">Detected risk</div>
+            <div className="mt-1.5"><RiskBadge score={report.riskScore} size="lg" /></div>
           </div>
           <div className="flex gap-6">
             <Metric n={report.checks.critical} label="Critical" hex="#f0483e" />
@@ -141,7 +141,7 @@ function TraderSections({ report }: { report: ScanReport }) {
             <Metric n={report.checks.passed} label="Passed" hex="#b4f11f" />
           </div>
         </div>
-        <div className="mt-5"><ScoreGauge score={report.safetyScore} /></div>
+        <div className="mt-5"><ScoreGauge score={report.riskScore} /></div>
       </Section>
 
       <Section id="assessment" title="Plain-language assessment">

@@ -25,7 +25,7 @@ The API exposes:
 - `GET /v1/tokens/:chainId/:address/findings`
 - `GET /v1/risk/:chainId/:address`
 
-Web result pages and Telegram scan submission use the same scan API contracts and application service. If a persisted `RiskAssessment` is absent, the risk snapshot returns `UNABLE_TO_VERIFY`, `score: null`, low confidence, and a message directing users to findings and evidence.
+Web result pages and Telegram scan submission use the same scan API contracts and application service. If a persisted `RiskAssessment` is absent, the risk snapshot returns `UNABLE_TO_ASSESS`, `score: null`, low confidence, and a message directing users to findings and evidence.
 
 ## Consequences
 

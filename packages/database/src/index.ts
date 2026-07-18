@@ -1357,7 +1357,10 @@ function toRiskSnapshot(scan: ScanResultRecord): RiskSnapshot {
       address: scan.targetAddress as `0x${string}`,
       scannerVersion: scan.riskAssessment.scannerVersion,
       status: "AVAILABLE",
-      level: scan.riskAssessment.level,
+      level:
+        scan.riskAssessment.level === "UNABLE_TO_VERIFY"
+          ? "UNABLE_TO_ASSESS"
+          : scan.riskAssessment.level,
       score: scan.riskAssessment.score,
       confidence: scan.riskAssessment.confidence,
       categoryScores: scan.riskAssessment.categoryScores.map((categoryScore) => ({
@@ -1374,8 +1377,8 @@ function toRiskSnapshot(scan: ScanResultRecord): RiskSnapshot {
     chainId: scan.chainId,
     address: scan.targetAddress as `0x${string}`,
     scannerVersion: scan.scannerVersion,
-    status: "UNABLE_TO_VERIFY",
-    level: "UNABLE_TO_VERIFY",
+    status: "UNABLE_TO_ASSESS",
+    level: "UNABLE_TO_ASSESS",
     score: null,
     confidence: "LOW",
     categoryScores: [],

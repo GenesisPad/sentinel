@@ -9,16 +9,9 @@ The homepage **is** the scanner — a user pastes a contract address or token UR
 
 ---
 
-## ⚠️ FIRST: restore the dynamic-route folder names
+## Dynamic token route
 
-This bundle was produced by a tool that strips `[` `]` from folder names. Before running, rename:
-
-```
-src/app/token/-chainId-/-address-/   →   src/app/token/[chainId]/[address]/
-```
-
-So the final path is `src/app/token/[chainId]/[address]/page.tsx` (and `loading.tsx`). Nothing else
-uses sanitized names.
+The canonical token report route is already present at `src/app/token/[chainId]/[address]/page.tsx` with matching `loading.tsx`.
 
 ## Setup
 
@@ -72,23 +65,18 @@ GET  /v1/scans/recent               -> RecentScan[] public detections
 inconclusive | failed | skipped | unsupported`. `scanEventsUrl()` in `src/lib/api.ts` returns the SSE
 endpoint; `useScan` currently polls — swap in an `EventSource` subscription there for live events.
 
-## Safety score model (higher = safer)
+## Risk Score model (higher = greater risk)
 
 Defined once in `src/lib/risk.ts`:
 ```
-80–100  Low Risk
-60–79   Moderate Risk
-40–59   High Risk
- 0–39   Critical Risk
-(null)  Unable to Assess
+ 0-19   Low Risk
+20-39   Moderate Risk
+40-59   Elevated Risk
+60-79   High Risk
+80-100  Critical Risk
+(null) Unable to Assess
 ```
-`RiskBadge` always renders an explicit label — never a bare "High Risk" header. `ScoreGauge` runs the
-gradient **red→amber→green** (0 is dangerous, 100 is safe) and animates once from 0 to the real score
-(snaps under reduced motion; accessible `role="meter"` value is correct immediately).
-
-> Note: this is inverted from an earlier design prototype where higher meant *riskier*. This codebase
-> follows the spec you provided: **higher = safer**. Fixtures reflect this (the dangerous demo token
-> scores 22).
+`RiskBadge` always renders an explicit label; never render a naked numeric score. `ScoreGauge` runs the gradient **green->amber->red** (0 is minimal detected risk, 100 is maximum detected risk) and animates once from 0 to the real score (snaps under reduced motion; accessible `role="meter"` value is correct immediately). Any numeric score must be labeled `Risk Score: x/100` and accompanied by the direction copy: "Higher score means greater risk."
 
 ## Frontend states covered
 
@@ -141,7 +129,6 @@ sections but the current graphs are dependency-free SVG — import it dynamicall
 
 ## Notes / TODO for the implementing developer
 
-- Restore the `[chainId]`/`[address]` folder names (see top).
 - Swap `useScan` polling for the SSE stream via `scanEventsUrl()` when the backend is ready.
 - shadcn is configured (`components.json`); the primitives here are hand-written in the shadcn style —
   run `npx shadcn@latest add <component>` to pull more as needed.

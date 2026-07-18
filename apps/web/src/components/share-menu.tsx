@@ -14,9 +14,10 @@ export function ShareMenu({ report }: { report: ScanReport }) {
   const path = `/token/${report.token.chainId}/${report.token.address}`;
   const url =
     (process.env.NEXT_PUBLIC_SITE_URL ?? (typeof window !== "undefined" ? window.location.origin : "")) + path;
-  const risk = riskFromScore(report.safetyScore);
+  const risk = riskFromScore(report.riskScore);
   const tokenLabel = report.token.symbol ? `$${report.token.symbol}` : shortAddress(report.token.address);
-  const scoreText = report.safetyScore != null ? `safety ${report.safetyScore}/100` : "safety unavailable";
+  const scoreText =
+    report.riskScore != null ? `Risk Score: ${report.riskScore}/100` : "Risk Score unavailable";
   const text = `${tokenLabel} on ${chain.label} — ${risk.label} (${scoreText}) via Genesis Sentinel`;
 
   async function copyLink() {

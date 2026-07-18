@@ -37,7 +37,15 @@ export function RiskBadge({
 }
 
 export function riskLevelLabel(level: RiskLevel): string {
-  return riskFromScore(level === "low" ? 90 : level === "moderate" ? 70 : level === "high" ? 50 : 20).label;
+  const scoreByLevel: Record<RiskLevel, number | null> = {
+    low: 10,
+    moderate: 30,
+    elevated: 50,
+    high: 70,
+    critical: 90,
+    unknown: null
+  };
+  return riskFromScore(scoreByLevel[level]).label;
 }
 
 function hexToRgba(hex: string, alpha: number): string {

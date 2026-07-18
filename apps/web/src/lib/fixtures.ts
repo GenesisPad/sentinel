@@ -64,8 +64,8 @@ export function buildFixtureReport(chainId: ChainId, address: string): ScanRepor
       createdAt: new Date(Date.now() - 4 * 3600_000).toISOString(),
       deployer: DEMO_ADDRESS
     },
-    // Higher = safer. This demo token is dangerous, so its safety score is low (22).
-    safetyScore: 22,
+    // Higher score means greater risk. This demo token is dangerous, so its Risk Score is high.
+    riskScore: 88,
     scoreExplanation:
       "This token can currently be bought and sold, but the owner can blacklist wallets and raise the sell tax to 100%. Liquidity is not locked and 58% of non-pool supply sits in related wallets.",
     checks: { critical: 2, high: 2, medium: 1, passed: 12 },
@@ -201,7 +201,7 @@ export const FIXTURE_RECENT: RecentScan[] = [
     address: "0x91abaa0000000000000000000000000000003c6d",
     name: "Rug Inc",
     symbol: "RUG",
-    safetyScore: 8,
+    riskScore: 92,
     scannedAt: new Date(Date.now() - 2 * 60_000).toISOString()
   },
   {
@@ -209,7 +209,7 @@ export const FIXTURE_RECENT: RecentScan[] = [
     address: "0x7f3e000000000000000000000000000000009a1b",
     name: "Taxable",
     symbol: "TAX",
-    safetyScore: 31,
+    riskScore: 69,
     scannedAt: new Date(Date.now() - 7 * 60_000).toISOString()
   },
   {
@@ -217,7 +217,7 @@ export const FIXTURE_RECENT: RecentScan[] = [
     address: "0x6d2a0000000000000000000000000000008f7e1d",
     name: "BlockList",
     symbol: "BLK",
-    safetyScore: 34,
+    riskScore: 66,
     scannedAt: new Date(Date.now() - 11 * 60_000).toISOString()
   },
   {
@@ -225,7 +225,7 @@ export const FIXTURE_RECENT: RecentScan[] = [
     address: "0xab120000000000000000000000000000004ef567",
     name: "Whale Token",
     symbol: "WHL",
-    safetyScore: 52,
+    riskScore: 48,
     scannedAt: new Date(Date.now() - 18 * 60_000).toISOString()
   },
   {
@@ -233,7 +233,7 @@ export const FIXTURE_RECENT: RecentScan[] = [
     address: "0xcd450000000000000000000000000000007ab890",
     name: "Unlocked",
     symbol: "ULK",
-    safetyScore: 57,
+    riskScore: 43,
     scannedAt: new Date(Date.now() - 24 * 60_000).toISOString()
   }
 ];

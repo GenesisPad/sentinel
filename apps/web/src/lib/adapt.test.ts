@@ -51,21 +51,21 @@ function baseView(overrides: Partial<ScanResultView> = {}): ScanResultView {
 }
 
 describe("mapResultToReport", () => {
-  it("inverts the backend's risk-direction score into a safety score", () => {
+  it("keeps the backend's canonical Risk Score direction", () => {
     const report = mapResultToReport(baseView());
-    // backend score 12 (low risk) -> safety score 88 (higher = safer)
-    expect(report.safetyScore).toBe(88);
+    // backend score 12 means low detected risk; higher score means greater risk.
+    expect(report.riskScore).toBe(12);
   });
 
-  it("keeps safetyScore null when the backend can't assess risk yet", () => {
+  it("keeps riskScore null when the backend can't assess risk yet", () => {
     const report = mapResultToReport(
       baseView({
         risk: {
           chainId: 4663,
           address: ADDRESS,
           scannerVersion: "0.1.0-foundation",
-          status: "UNABLE_TO_VERIFY",
-          level: "UNABLE_TO_VERIFY",
+          status: "UNABLE_TO_ASSESS",
+          level: "UNABLE_TO_ASSESS",
           score: null,
           confidence: "LOW",
           categoryScores: [],
@@ -74,7 +74,7 @@ describe("mapResultToReport", () => {
         }
       })
     );
-    expect(report.safetyScore).toBeNull();
+    expect(report.riskScore).toBeNull();
   });
 
   it("derives contract controls from selector-pattern findings once contract analysis has run", () => {

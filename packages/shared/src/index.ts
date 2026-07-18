@@ -37,7 +37,13 @@ export type RiskCategory =
   | "DISTRIBUTION_RISK"
   | "REPUTATION_RISK";
 
-export type RiskLevel = "LOW" | "MODERATE" | "HIGH" | "CRITICAL" | "UNABLE_TO_VERIFY";
+export type RiskLevel =
+  | "LOW"
+  | "MODERATE"
+  | "ELEVATED"
+  | "HIGH"
+  | "CRITICAL"
+  | "UNABLE_TO_ASSESS";
 
 export type OwnershipStatus = "RENOUNCED" | "ACTIVE" | "UNKNOWN";
 
@@ -93,6 +99,31 @@ export const riskScoreRange = {
   minimum: 0,
   maximum: 100
 } as const;
+
+export const riskScoreDirection =
+  "Risk Score: 0=minimal detected risk, 100=maximum detected risk. Higher score means greater risk." as const;
+
+export function riskLevelForScore(score: number): Exclude<RiskLevel, "UNABLE_TO_ASSESS"> {
+  assertRiskScore(score);
+
+  if (score >= 80) {
+    return "CRITICAL";
+  }
+
+  if (score >= 60) {
+    return "HIGH";
+  }
+
+  if (score >= 40) {
+    return "ELEVATED";
+  }
+
+  if (score >= 20) {
+    return "MODERATE";
+  }
+
+  return "LOW";
+}
 
 export interface ServiceHealth {
   status: "ok";
@@ -249,7 +280,7 @@ export interface RiskSnapshot {
   chainId: number;
   address: `0x${string}`;
   scannerVersion: string;
-  status: "AVAILABLE" | "UNABLE_TO_VERIFY";
+  status: "AVAILABLE" | "UNABLE_TO_ASSESS";
   level: RiskLevel;
   score: number | null;
   confidence: FindingConfidence;
