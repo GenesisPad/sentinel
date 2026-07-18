@@ -599,7 +599,7 @@ describe("genesispad launch detector", () => {
 describe("deployer history detector", () => {
   it("reports data unavailable when no deployer address is known", async () => {
     const result = await deployerHistoryDetector.run(
-      { deployerHistory: null, bytecodeReuse: null },
+      { deployerHistory: null, bytecodeReuse: null, relatedWalletEdges: [] },
       context
     );
 
@@ -617,7 +617,8 @@ describe("deployer history detector", () => {
           previousHighOrCriticalCount: 0,
           entries: []
         },
-        bytecodeReuse: null
+        bytecodeReuse: null,
+        relatedWalletEdges: []
       },
       context
     );
@@ -635,7 +636,8 @@ describe("deployer history detector", () => {
           previousHighOrCriticalCount: 3,
           entries: []
         },
-        bytecodeReuse: null
+        bytecodeReuse: null,
+        relatedWalletEdges: []
       },
       context
     );
@@ -658,7 +660,8 @@ describe("deployer history detector", () => {
           previousHighOrCriticalCount: 0,
           entries: []
         },
-        bytecodeReuse: null
+        bytecodeReuse: null,
+        relatedWalletEdges: []
       },
       context
     );
@@ -677,7 +680,8 @@ describe("deployer history detector", () => {
             "0x0000000000000000000000000000000000000003",
             "0x0000000000000000000000000000000000000004"
           ]
-        }
+        },
+        relatedWalletEdges: []
       },
       context
     );
@@ -685,6 +689,71 @@ describe("deployer history detector", () => {
     expect(result.findings.some((finding) => finding.code === "BYTECODE_REUSED_ACROSS_SCANS")).toBe(
       true
     );
+  });
+
+  it("passes with no finding when no related-wallet edges were found", async () => {
+    const result = await deployerHistoryDetector.run(
+      { deployerHistory: null, bytecodeReuse: null, relatedWalletEdges: [] },
+      context
+    );
+
+    expect(
+      result.checks.some((check) => check.code === "WALLET_CLUSTERING_EDGES_ABSENT")
+    ).toBe(true);
+  });
+
+  it("flags a TRANSFERRED_SUPPLY_TO edge as a distribution-risk finding", async () => {
+    const result = await deployerHistoryDetector.run(
+      {
+        deployerHistory: null,
+        bytecodeReuse: null,
+        relatedWalletEdges: [
+          {
+            type: "TRANSFERRED_SUPPLY_TO",
+            address: "0x0000000000000000000000000000000000000005",
+            confidence: "HIGH",
+            evidence: "Deployer transferred ~12.0% of total supply to this address (block 100).",
+            source: "erc20-transfer-log-scan",
+            firstObservedBlock: "100"
+          }
+        ]
+      },
+      context
+    );
+
+    expect(result.findings[0]).toMatchObject({
+      code: "SUPPLY_TRANSFERRED_TO_WALLET",
+      severity: "MEDIUM",
+      category: "DISTRIBUTION_RISK"
+    });
+    expect(
+      result.checks.some((check) => check.code === "WALLET_CLUSTERING_EDGES_FOUND")
+    ).toBe(true);
+  });
+
+  it("reports a FUNDED_BY edge as informational, not a risk verdict", async () => {
+    const result = await deployerHistoryDetector.run(
+      {
+        deployerHistory: null,
+        bytecodeReuse: null,
+        relatedWalletEdges: [
+          {
+            type: "FUNDED_BY",
+            address: "0x0000000000000000000000000000000000000006",
+            confidence: "MEDIUM",
+            evidence: "Earliest inbound native-value transfer found within the first 5 page(s).",
+            source: "blockscout-transaction-history"
+          }
+        ]
+      },
+      context
+    );
+
+    expect(result.findings[0]).toMatchObject({
+      code: "DEPLOYER_FUNDED_BY_WALLET",
+      severity: "INFO",
+      category: "REPUTATION_RISK"
+    });
   });
 });
 

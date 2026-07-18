@@ -2,6 +2,7 @@ import type { ChainAdapter } from "@genesis-sentinel/chain-adapters";
 import type { ContractSourceDetectorInput } from "@genesis-sentinel/security-engine";
 import type { GenesisPadLaunchProvider } from "./genesispad-registry.js";
 import type { LockerProvider } from "./locker.js";
+import type { WalletClusteringProvider } from "./wallet-clustering.js";
 
 /**
  * Provider-neutral domain contracts for the evidence lookups a scan needs beyond raw RPC
@@ -230,4 +231,7 @@ export interface ProviderSet {
   locker: LockerProvider;
   /** Optional: only meaningful for chains with a GenesisPad launch registry deployed. */
   launchpad?: GenesisPadLaunchProvider;
+  /** Optional: real edges are only found when the underlying chain has an explorer/RPC that
+   * supports the lookups; other chains simply omit this field. */
+  walletClustering?: WalletClusteringProvider;
 }

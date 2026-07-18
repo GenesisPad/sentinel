@@ -12,6 +12,7 @@ import { createGenesisPadLaunchProvider } from "./genesispad-registry.js";
 import { createRobinhoodLiquidityProvider, robinhoodChainId } from "./robinhood-liquidity.js";
 import { createSourcifyContractSourceProvider } from "./sourcify.js";
 import type { ProviderSet } from "./types.js";
+import { createBlockscoutWalletClusteringProvider } from "./wallet-clustering.js";
 
 const robinhoodBlockscoutConfig: BlockscoutChainConfig = {
   chainId: robinhoodChainId,
@@ -87,6 +88,10 @@ export function createProviderRegistry(): { getProviderSet(chainId: number): Pro
     launchpad: createGenesisPadLaunchProvider({
       chainId: robinhoodChainId,
       registryAddress: robinhoodGenesisLaunchRegistryAddress
+    }),
+    walletClustering: createBlockscoutWalletClusteringProvider({
+      chainId: robinhoodChainId,
+      apiBaseUrl: robinhoodBlockscoutConfig.apiBaseUrl
     })
   });
 

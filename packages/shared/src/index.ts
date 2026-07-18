@@ -317,6 +317,27 @@ export interface BytecodeReuseView {
   reusedByAddresses: `0x${string}`[];
 }
 
+export type RelatedWalletEdgeType =
+  | "FUNDED_BY"
+  | "DEPLOYED_BY"
+  | "OWNED_BY"
+  | "SHARED_BYTECODE"
+  | "TRANSFERRED_SUPPLY_TO";
+
+/**
+ * A single wallet-relationship edge with its own evidence and confidence — never inferred
+ * from timing coincidence alone (e.g. two wallets buying near the same time is NOT sufficient
+ * evidence for an edge). Each edge names the concrete on-chain observation that produced it.
+ */
+export interface RelatedWalletEdge {
+  type: RelatedWalletEdgeType;
+  address: `0x${string}`;
+  confidence: FindingConfidence;
+  evidence: string;
+  source: string;
+  firstObservedBlock?: string;
+}
+
 export function createHealth(service: string): ServiceHealth {
   return {
     status: "ok",

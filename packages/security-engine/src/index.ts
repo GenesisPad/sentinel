@@ -7,6 +7,7 @@ import type {
   FindingConfidence,
   FindingEvidence,
   FindingSeverity,
+  RelatedWalletEdge,
   RiskAssessment,
   RiskCategory,
   SecurityFinding,
@@ -1302,6 +1303,10 @@ export const genesispadLaunchDetector: SecurityDetector<GenesisPadLaunchDetector
 export interface DeployerHistoryDetectorInput {
   deployerHistory: DeployerHistoryView | null;
   bytecodeReuse: BytecodeReuseView | null;
+  /** Fully assembled wallet-relationship edges (DEPLOYED_BY/OWNED_BY/SHARED_BYTECODE plus any
+   * FUNDED_BY/TRANSFERRED_SUPPLY_TO edges found via on-chain scans) — see
+   * @genesis-sentinel/providers' wallet-clustering.ts for how the latter two are derived. */
+  relatedWalletEdges: RelatedWalletEdge[];
 }
 
 /**
@@ -1433,6 +1438,72 @@ export const deployerHistoryDetector: SecurityDetector<DeployerHistoryDetectorIn
         outcome: "DETECTED",
         confidence: "HIGH",
         evidence: [evidence]
+      });
+    }
+
+    if (input.relatedWalletEdges.length > 0) {
+      const edgeEvidence: FindingEvidence = {
+        type: "EXTERNAL_SOURCE",
+        summary: "Related-wallet edges derived from on-chain evidence, never timing coincidence",
+        address: context.address,
+        data: { edges: input.relatedWalletEdges }
+      };
+      if (context.blockNumber !== undefined) {
+        edgeEvidence.blockNumber = context.blockNumber;
+      }
+      checks.push({
+        code: "WALLET_CLUSTERING_EDGES_FOUND",
+        outcome: "DETECTED",
+        confidence: "HIGH",
+        evidence: [edgeEvidence]
+      });
+
+      for (const edge of input.relatedWalletEdges) {
+        if (edge.type === "TRANSFERRED_SUPPLY_TO") {
+          findings.push(
+            createFinding({
+              code: "SUPPLY_TRANSFERRED_TO_WALLET",
+              detector: this.metadata,
+              title: "Deployer transferred a significant share of supply to another wallet",
+              severity: "MEDIUM",
+              category: "DISTRIBUTION_RISK",
+              confidence: edge.confidence,
+              description: `${edge.evidence} (${edge.address})`,
+              technicalExplanation: `Edge type ${edge.type}, source: ${edge.source}.`,
+              evidence: [edgeEvidence],
+              recommendation:
+                "Review whether this recipient is a known team/vesting/exchange wallet or an unexplained large holder."
+            })
+          );
+        } else if (edge.type === "FUNDED_BY") {
+          findings.push(
+            createFinding({
+              code: "DEPLOYER_FUNDED_BY_WALLET",
+              detector: this.metadata,
+              title: "Deployer wallet's funding source identified",
+              severity: "INFO",
+              category: "REPUTATION_RISK",
+              confidence: edge.confidence,
+              description: `${edge.evidence} (${edge.address})`,
+              technicalExplanation: `Edge type ${edge.type}, source: ${edge.source}.`,
+              evidence: [edgeEvidence]
+            })
+          );
+        }
+      }
+    } else {
+      checks.push({
+        code: "WALLET_CLUSTERING_EDGES_ABSENT",
+        outcome: "PASSED",
+        confidence: "MEDIUM",
+        evidence: [
+          {
+            type: "EXTERNAL_SOURCE",
+            summary: "No related-wallet edges were found from available on-chain evidence",
+            address: context.address,
+            data: {}
+          }
+        ]
       });
     }
 

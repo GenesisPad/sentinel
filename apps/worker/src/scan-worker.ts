@@ -32,6 +32,7 @@ import {
   sourceCodeRiskDetector
 } from "@genesis-sentinel/security-engine";
 import { scannerVersion } from "@genesis-sentinel/shared";
+import type { BytecodeReuseView, RelatedWalletEdge } from "@genesis-sentinel/shared";
 
 const sentinelStaticCallWallet = "0x0000000000000000000000000000000000001001" as const;
 
@@ -530,6 +531,90 @@ function readOwnerAddressFromDetectorResults(results: DetectorResult[]): `0x${st
   return addressValue(owner);
 }
 
+const burnOrZeroAddresses = new Set([
+  "0x0000000000000000000000000000000000000000",
+  "0x000000000000000000000000000000000000dead"
+]);
+
+/**
+ * Assembles real, evidence-backed related-wallet edges (Milestone 6): DEPLOYED_BY/OWNED_BY
+ * from data this scan already collected, SHARED_BYTECODE from Sentinel's own scan history,
+ * and (when a wallet-clustering provider is wired for this chain) FUNDED_BY/
+ * TRANSFERRED_SUPPLY_TO from bounded on-chain/explorer lookups. Never infers a relationship
+ * from timing coincidence.
+ */
+async function buildRelatedWalletEdges(input: {
+  adapter: ChainAdapter;
+  providers: ProviderSet | null;
+  chainId: number;
+  tokenAddress: `0x${string}`;
+  blockNumber: bigint;
+  deployerAddress: `0x${string}` | null;
+  ownerAddress: `0x${string}` | null;
+  totalSupply: string | null;
+  bytecodeReuse: BytecodeReuseView | null;
+}): Promise<RelatedWalletEdge[]> {
+  const edges: RelatedWalletEdge[] = [];
+
+  if (input.deployerAddress) {
+    edges.push({
+      type: "DEPLOYED_BY",
+      address: input.deployerAddress,
+      confidence: "HIGH",
+      evidence: "Explorer token profile reports this address as the contract deployer.",
+      source: "explorer-token-profile"
+    });
+  }
+
+  if (input.ownerAddress && !burnOrZeroAddresses.has(input.ownerAddress.toLowerCase())) {
+    edges.push({
+      type: "OWNED_BY",
+      address: input.ownerAddress,
+      confidence: "HIGH",
+      evidence: "owner() returned this address directly on-chain at the scan block.",
+      source: "on-chain-owner-read"
+    });
+  }
+
+  if (input.bytecodeReuse) {
+    for (const address of input.bytecodeReuse.reusedByAddresses) {
+      edges.push({
+        type: "SHARED_BYTECODE",
+        address,
+        confidence: "HIGH",
+        evidence:
+          "This contract's runtime bytecode hash exactly matches this address's, per Sentinel's own scan history.",
+        source: "bytecode-hash-match"
+      });
+    }
+  }
+
+  if (input.providers?.walletClustering && input.deployerAddress) {
+    const deployerAddress = input.deployerAddress;
+    const fundedByEdge = await input.providers.walletClustering
+      .findFundingWallet({ chainId: input.chainId, address: deployerAddress })
+      .catch((): null => null);
+    if (fundedByEdge) {
+      edges.push(fundedByEdge);
+    }
+
+    const supplyEdges = await input.providers.walletClustering
+      .findSupplyTransfers({
+        adapter: input.adapter,
+        chainId: input.chainId,
+        tokenAddress: input.tokenAddress,
+        deployerAddress,
+        fromBlock: 0n,
+        toBlock: input.blockNumber,
+        totalSupply: input.totalSupply
+      })
+      .catch((): RelatedWalletEdge[] => []);
+    edges.push(...supplyEdges);
+  }
+
+  return edges;
+}
+
 export interface ScanProcessorDependencies {
   scans: ScanRepository;
   getChainAdapter(chainId: number): ChainAdapter;
@@ -761,8 +846,20 @@ export async function processScanJob(
           .getBytecodeReuse(target.chainId, bytecodeHash, target.address)
           .catch(() => null)
       : null;
+    const ownerAddressForEdges = readOwnerAddressFromDetectorResults(detectorResults);
+    const relatedWalletEdges = await buildRelatedWalletEdges({
+      adapter,
+      providers,
+      chainId: target.chainId,
+      tokenAddress: target.address,
+      blockNumber,
+      deployerAddress: tokenProfile.deployerAddress,
+      ownerAddress: ownerAddressForEdges,
+      totalSupply: tokenProfile.totalSupply,
+      bytecodeReuse
+    });
     const deployerHistoryResult = await deployerHistoryDetector.run(
-      { deployerHistory, bytecodeReuse },
+      { deployerHistory, bytecodeReuse, relatedWalletEdges },
       detectorRunContext
     );
     detectorResults.push(
