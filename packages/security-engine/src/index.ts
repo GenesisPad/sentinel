@@ -1186,6 +1186,117 @@ export const liveTradingStateDetector: SecurityDetector<LiveTradingStateDetector
   }
 };
 
+export interface GenesisPadLaunchDetectorInput {
+  launch: {
+    originalCreator: `0x${string}`;
+    pool: `0x${string}`;
+    positionManager: `0x${string}`;
+    locker: `0x${string}`;
+    positionTokenId: string;
+    permanentlyLocked: boolean;
+    verified: boolean;
+    launchTimestamp: Date;
+  } | null;
+}
+
+/**
+ * Reports confirmed GenesisPad launch provenance from the on-chain GenesisLaunchRegistry
+ * (see @genesis-sentinel/providers' GenesisPadLaunchProvider) — never inferred from a website
+ * label or token metadata. When permanentlyLocked is true, this is real, registry-confirmed
+ * evidence that the token's Uniswap V3 launch position cannot be withdrawn by anyone,
+ * independent of the generic V2-only Genesis Locker check.
+ */
+export const genesispadLaunchDetector: SecurityDetector<GenesisPadLaunchDetectorInput> = {
+  metadata: {
+    id: "genesispad-launch-provenance",
+    version: detectorVersion,
+    name: "GenesisPad launch provenance",
+    description:
+      "Checks the on-chain GenesisLaunchRegistry for a confirmed GenesisPad direct-Uniswap-V3 launch record."
+  },
+
+  async run(input, context) {
+    await Promise.resolve();
+
+    if (!input.launch) {
+      return {
+        detector: this.metadata,
+        checks: [
+          {
+            code: "GENESISPAD_LAUNCH_NOT_FOUND",
+            outcome: "PASSED",
+            confidence: "MEDIUM",
+            evidence: [
+              {
+                type: "FUNCTION",
+                summary: "GenesisLaunchRegistry.isRegistered() read",
+                address: context.address,
+                data: { registered: false }
+              }
+            ]
+          }
+        ],
+        findings: []
+      };
+    }
+
+    const evidence: FindingEvidence = {
+      type: "FUNCTION",
+      summary: "GenesisLaunchRegistry.isRegistered()/getLaunch() read",
+      address: context.address,
+      data: {
+        originalCreator: input.launch.originalCreator,
+        pool: input.launch.pool,
+        positionManager: input.launch.positionManager,
+        locker: input.launch.locker,
+        positionTokenId: input.launch.positionTokenId,
+        permanentlyLocked: input.launch.permanentlyLocked,
+        verified: input.launch.verified,
+        launchTimestamp: input.launch.launchTimestamp.toISOString()
+      }
+    };
+    if (context.blockNumber !== undefined) {
+      evidence.blockNumber = context.blockNumber;
+    }
+
+    return {
+      detector: this.metadata,
+      checks: [
+        {
+          code: "GENESISPAD_LAUNCH_CONFIRMED",
+          outcome: "DETECTED",
+          confidence: "HIGH",
+          evidence: [evidence]
+        }
+      ],
+      findings: [
+        createFinding({
+          code: "GENESISPAD_CONFIRMED_LAUNCH",
+          detector: this.metadata,
+          title: input.launch.permanentlyLocked
+            ? "Token launched via GenesisPad with liquidity permanently locked"
+            : "Token launched via GenesisPad",
+          severity: "INFO",
+          category: "REPUTATION_RISK",
+          confidence: "HIGH",
+          description: input.launch.permanentlyLocked
+            ? "The on-chain GenesisLaunchRegistry confirms this token was launched via GenesisPad's direct-Uniswap-V3 launch flow, with its launch liquidity position permanently locked and not withdrawable by anyone."
+            : "The on-chain GenesisLaunchRegistry confirms this token was launched via GenesisPad's direct-Uniswap-V3 launch flow. Its launch liquidity position is not reported as permanently locked.",
+          technicalExplanation:
+            "isRegistered() and getLaunch() were read directly from the GenesisLaunchRegistry contract at the scan block; permanentlyLocked reflects the registry's own record, not an inference.",
+          evidence: [evidence],
+          ...(input.launch.permanentlyLocked
+            ? {}
+            : {
+                recommendation:
+                  "Review the launch position directly (pool/positionManager/positionTokenId in evidence) before assuming the launch liquidity is locked."
+              })
+        })
+      ]
+    };
+  }
+};
+
 export function createEmptyDetectorResult(metadata: DetectorMetadata): DetectorResult {
   return {
     detector: metadata,

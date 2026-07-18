@@ -6,5 +6,7 @@ export * from "./contract-source-chain.js";
 export * from "./cache.js";
 export * from "./dexscreener.js";
 export * from "./locker.js";
+export * from "./genesis-locker.js";
+export * from "./genesispad-registry.js";
 export * from "./robinhood-liquidity.js";
 export * from "./registry.js";

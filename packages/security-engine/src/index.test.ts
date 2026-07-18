@@ -8,6 +8,7 @@ import {
   createEmptyDetectorResult,
   dangerousOpcodeDetector,
   eip1967ProxyDetector,
+  genesispadLaunchDetector,
   liveTradingStateDetector,
   ownershipRolesAbiDetector,
   ownershipStatusDetector,
@@ -534,6 +535,63 @@ describe("live trading state detector", () => {
 
     expect(result.findings).toEqual([]);
     expect(result.checks[0]).toMatchObject({ code: "LIVE_TRADING_STATE_OPEN", outcome: "PASSED" });
+  });
+});
+
+describe("genesispad launch detector", () => {
+  it("passes with no finding when the registry has no record for this token", async () => {
+    const result = await genesispadLaunchDetector.run({ launch: null }, context);
+
+    expect(result.findings).toEqual([]);
+    expect(result.checks[0]).toMatchObject({
+      code: "GENESISPAD_LAUNCH_NOT_FOUND",
+      outcome: "PASSED"
+    });
+  });
+
+  it("reports a confirmed launch with permanently locked liquidity", async () => {
+    const result = await genesispadLaunchDetector.run(
+      {
+        launch: {
+          originalCreator: "0x0000000000000000000000000000000000000002",
+          pool: "0x0000000000000000000000000000000000000003",
+          positionManager: "0x0000000000000000000000000000000000000004",
+          locker: "0x0000000000000000000000000000000000000005",
+          positionTokenId: "42",
+          permanentlyLocked: true,
+          verified: true,
+          launchTimestamp: new Date("2026-07-15T00:00:00.000Z")
+        }
+      },
+      context
+    );
+
+    expect(result.findings[0]).toMatchObject({
+      code: "GENESISPAD_CONFIRMED_LAUNCH",
+      severity: "INFO",
+      category: "REPUTATION_RISK"
+    });
+    expect(result.findings[0]?.recommendation).toBeUndefined();
+  });
+
+  it("reports a confirmed launch without a permanent-lock recommendation when not locked", async () => {
+    const result = await genesispadLaunchDetector.run(
+      {
+        launch: {
+          originalCreator: "0x0000000000000000000000000000000000000002",
+          pool: "0x0000000000000000000000000000000000000003",
+          positionManager: "0x0000000000000000000000000000000000000004",
+          locker: "0x0000000000000000000000000000000000000005",
+          positionTokenId: "42",
+          permanentlyLocked: false,
+          verified: false,
+          launchTimestamp: new Date("2026-07-15T00:00:00.000Z")
+        }
+      },
+      context
+    );
+
+    expect(result.findings[0]?.recommendation).toBeTruthy();
   });
 });
 

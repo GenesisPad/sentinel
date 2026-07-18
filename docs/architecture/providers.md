@@ -11,8 +11,12 @@ a scan needs beyond raw RPC access:
 - `HolderProvider` — top-holder snapshot and concentration analysis.
 - `LiquidityProvider` — on-chain pool discovery across DEX protocols.
 - `LockerProvider` — LP-lock verification against a specific third-party locker contract (see
-  `docs/architecture/liquidity.md`; distinct from burn-address detection, and `UNSUPPORTED` for
-  every chain until a real locker is wired).
+  `docs/architecture/liquidity.md`; distinct from burn-address detection). Robinhood Chain is
+  wired to the real, deployed Genesis Locker contract via `createGenesisLockerProvider`.
+- `GenesisPadLaunchProvider` (optional `launchpad` field on `ProviderSet`) — confirms whether a
+  token was launched via GenesisPad's current direct-Uniswap-V3 flow by reading the on-chain
+  `GenesisLaunchRegistry`, never a website label. See
+  `docs/detection-rules/genesispad-launch-provenance.md`.
 
 Each interface exposes `supportsChain(chainId)` so callers never branch on vendor name or
 adapter identity. `apps/worker/src/scan-worker.ts` looks up one `ProviderSet` per scan via
@@ -32,7 +36,10 @@ Only Robinhood Chain (4663) has a registered `ProviderSet` today, combining:
 - `createDexScreenerMarketDataProvider` — DexScreener, network slug `robinhood`.
 - `createRobinhoodLiquidityProvider` — on-chain Uniswap V2/V3/V4 discovery against the
   Robinhood Chain factory/PoolManager addresses, using the Blockscout explorer provider's
-  price lookup for USD valuation.
+  price lookup for USD valuation, and the wired `LockerProvider` for LP-lock evidence.
+- `createGenesisLockerProvider` — real Genesis Locker LP-lock verification (see
+  `docs/architecture/liquidity.md`).
+- `createGenesisPadLaunchProvider` — real GenesisPad direct-V3 launch-registry lookup.
 
 ## Fallback order
 

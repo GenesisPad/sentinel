@@ -197,7 +197,7 @@ async function discoverUniswapV2Pool(
       ? (Number(reserveQuote) / 10 ** quote.decimals) * 2 * quotePriceUsd
       : null;
   const lockStatus = await locker
-    .getLockStatus({ chainId, lpTokenAddress: pairAddress })
+    .getLockStatus({ adapter, chainId, lpTokenAddress: pairAddress })
     .catch(
       (): LockStatusResult => ({
         status: "UNSUPPORTED",

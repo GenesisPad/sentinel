@@ -22,6 +22,7 @@ import {
   createUnsupportedHolderAnalysis,
   createUnsupportedLiquidityDiscovery,
   createUnsupportedTradeSimulations,
+  genesispadLaunchDetector,
   liveTradingStateDetector,
   ownershipRolesAbiDetector,
   runFoundationDetectors,
@@ -712,7 +713,21 @@ export async function processScanJob(
       },
       detectorRunContext
     );
-    detectorResults.push(sourceDetectorResult, ownershipRolesResult, liveTradingStateResult);
+    const genesispadLaunch = providers?.launchpad
+      ? await providers.launchpad
+          .getLaunchInfo({ adapter, chainId: target.chainId, tokenAddress: target.address })
+          .catch(() => null)
+      : null;
+    const genesispadLaunchResult = await genesispadLaunchDetector.run(
+      { launch: genesispadLaunch },
+      detectorRunContext
+    );
+    detectorResults.push(
+      sourceDetectorResult,
+      ownershipRolesResult,
+      liveTradingStateResult,
+      genesispadLaunchResult
+    );
     const detectorCompletedAt = now();
     for (const result of detectorResults) {
       await dependencies.scans.recordDetectorResult({

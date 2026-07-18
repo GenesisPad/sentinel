@@ -11,6 +11,7 @@ describe("createUnsupportedLockerProvider", () => {
   it("reports UNSUPPORTED rather than guessing a lock status", async () => {
     const locker = createUnsupportedLockerProvider();
     const result = await locker.getLockStatus({
+      adapter: {} as never,
       chainId: 4663,
       lpTokenAddress: "0x0000000000000000000000000000000000000001"
     });

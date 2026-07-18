@@ -1,5 +1,6 @@
 import type { ChainAdapter } from "@genesis-sentinel/chain-adapters";
 import type { ContractSourceDetectorInput } from "@genesis-sentinel/security-engine";
+import type { GenesisPadLaunchProvider } from "./genesispad-registry.js";
 import type { LockerProvider } from "./locker.js";
 
 /**
@@ -211,4 +212,6 @@ export interface ProviderSet {
   holder: HolderProvider;
   liquidity: LiquidityProvider;
   locker: LockerProvider;
+  /** Optional: only meaningful for chains with a GenesisPad launch registry deployed. */
+  launchpad?: GenesisPadLaunchProvider;
 }

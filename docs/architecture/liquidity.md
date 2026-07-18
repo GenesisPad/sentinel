@@ -39,22 +39,28 @@ signals in `liquidityData` — they are never merged into one claim:
 - `lpBurnedOrLockedPct` — verified by summing LP-token balances at known burn/dead addresses
   directly on-chain. This is real, checkable evidence.
 - `lockStatus` — the result of a provider-neutral `LockerProvider.getLockStatus()` call (see
-  `packages/providers/src/locker.ts`). No concrete locker is wired for any chain today (Genesis
-  Locker's contract addresses/lock-record ABI are not yet available/verified in this codebase),
-  so this always reports `{ status: "UNSUPPORTED", reason: "..." }`. It is never inferred from
-  the burn percentage or from an explorer/website label — per the project rule "do not trust a
-  website label saying 'locked.'" When Genesis Locker's contracts are available, implement
-  `LockerProvider` against them and register it in `packages/providers/src/registry.ts`; no
-  other code changes are needed.
+  `packages/providers/src/locker.ts`). It is never inferred from the burn percentage or from
+  an explorer/website label — per the project rule "do not trust a website label saying
+  'locked.'" Robinhood Chain is wired to `createGenesisLockerProvider`
+  (`packages/providers/src/genesis-locker.ts`), reading the real, deployed Genesis Locker
+  contract (`0x0372a1AE860CDc9357ac6bc8e9F97856b37B80Ed`, verified against
+  `C:\Projects\genesispad\genesis-locker\contracts\deployments\robinhood.json` and
+  cross-confirmed in `C:\Projects\genesispad\contracts\deployments\robinhood\
+  production-stack.json`). It calls `getTokenLocks(lpToken)` then `getLock(lockId)` for each
+  record, sums remaining (non-withdrawn) locked amounts, and reports `LOCKED` with the real
+  locked amount and expiry (or no expiry if permanent), `UNKNOWN` when no active lock record
+  exists for that LP token, or `UNSUPPORTED` for chains with no locker wired.
 
-V3 liquidity positions are NFT-based (Uniswap's `NonfungiblePositionManager`), and per-position
-ownership/tick-range/in-range status is **not implemented**. Robinhood Chain's
-`NonfungiblePositionManager` address has not been verified in this codebase, and the project
-rule against fabricating unverified contract addresses applies here the same as for V4:
-implementing V3 position-level ownership against a guessed address would be worse than not
-implementing it. Current V3 discovery only reports pool-level liquidity (see
-`discoverUniswapV3Pool`), not position ownership; treat any future work here as a distinct,
-explicitly-scoped addition once the position manager address is verified.
+V3 liquidity positions are NFT-based (Uniswap's `NonfungiblePositionManager`). Generic
+per-position ownership for arbitrary V3 pools is still not implemented — Robinhood Chain's
+`NonfungiblePositionManager` address has not been verified independent of a specific launch,
+and the project rule against fabricating unverified contract addresses applies here the same
+as for V4. However, for tokens launched via GenesisPad specifically, real V3 position evidence
+*is* available: see `genesispad-launch-provenance` in
+`docs/detection-rules/genesispad-launch-provenance.md`, which reads the on-chain
+`GenesisLaunchRegistry` — that registry records the exact `positionManager`, `positionTokenId`,
+and `permanentlyLocked` status for each GenesisPad launch, so no address needs to be guessed for
+that specific, common case. Non-GenesisPad V3 pools remain undetermined for position ownership.
 
 Future liquidity discovery should:
 

@@ -1,3 +1,5 @@
+import type { ChainAdapter } from "@genesis-sentinel/chain-adapters";
+
 /**
  * Provider-neutral LP-locker adapter (Milestone 3). Distinguishes "burned" (verified by
  * checking known burn-address balances directly on-chain — see robinhood-liquidity.ts) from
@@ -5,11 +7,9 @@
  * (neither burned nor verified locked). A website or explorer label claiming LP is "locked" is
  * not sufficient evidence on its own; only a real locker contract read counts.
  *
- * No concrete locker is wired yet — Genesis Locker's contract addresses and lock-record ABI
- * are not yet available/verified in this codebase, so createUnsupportedLockerProvider is the
- * only implementation today. When Genesis Locker's contracts are available, implement this
- * interface against them and register it per-chain the same way source/explorer/liquidity
- * providers are registered in registry.ts.
+ * createGenesisLockerProvider (genesis-locker.ts) implements this against the real, deployed
+ * Genesis Locker contract on Robinhood Chain. createUnsupportedLockerProvider remains the
+ * fallback for chains with no locker wired.
  */
 export interface LockStatusResult {
   status: "LOCKED" | "UNKNOWN" | "UNSUPPORTED";
@@ -24,6 +24,7 @@ export interface LockerProvider {
   readonly id: string;
   supportsChain(chainId: number): boolean;
   getLockStatus(input: {
+    adapter: ChainAdapter;
     chainId: number;
     lpTokenAddress: `0x${string}`;
   }): Promise<LockStatusResult>;

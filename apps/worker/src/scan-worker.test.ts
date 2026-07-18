@@ -224,6 +224,7 @@ describe("scan worker orchestration", () => {
       "detector:source-code-risk-patterns:0",
       "detector:ownership-roles-abi:0",
       "detector:live-trading-state:0",
+      "detector:genesispad-launch-provenance:0",
       "stage:ANALYZING_CONTRACT:SUCCEEDED",
       "state:DISCOVERING_MARKETS",
       "stage:DISCOVERING_MARKETS:RUNNING",

@@ -7,7 +7,8 @@ import {
 import { createCachedContractSourceProvider } from "./cache.js";
 import { createContractSourceChain } from "./contract-source-chain.js";
 import { createDexScreenerMarketDataProvider } from "./dexscreener.js";
-import { createUnsupportedLockerProvider } from "./locker.js";
+import { createGenesisLockerProvider } from "./genesis-locker.js";
+import { createGenesisPadLaunchProvider } from "./genesispad-registry.js";
 import { createRobinhoodLiquidityProvider, robinhoodChainId } from "./robinhood-liquidity.js";
 import { createSourcifyContractSourceProvider } from "./sourcify.js";
 import type { ProviderSet } from "./types.js";
@@ -17,6 +18,17 @@ const robinhoodBlockscoutConfig: BlockscoutChainConfig = {
   apiBaseUrl: "https://robinhoodchain.blockscout.com/api/v2",
   legacyApiBaseUrl: "https://robinhoodchain.blockscout.com/api"
 };
+
+// Verified against C:\Projects\genesispad\genesis-locker\contracts\deployments\robinhood.json,
+// cross-confirmed in C:\Projects\genesispad\contracts\deployments\robinhood\
+// production-stack.json ("contracts.GenesisLocker" — same address in both sibling repos).
+const robinhoodGenesisLockerAddress = "0x0372a1AE860CDc9357ac6bc8e9F97856b37B80Ed" as const;
+
+// Verified against C:\Projects\genesispad\contracts\deployments\robinhood\direct-v3-stack.json,
+// marked "sourceOfTruth": true for GenesisPad's current direct-Uniswap-V3 launch model
+// ("launchModel": "DIRECT_UNISWAP_V3"). GenesisPad's older bonding-curve launcher is
+// intentionally not wired here.
+const robinhoodGenesisLaunchRegistryAddress = "0xAEeF0D03CC8E9FF7879C86Ce07b70f06084b3069" as const;
 
 /**
  * Source-provider fallback order per docs/architecture/provider-strategy.md: Sourcify first
@@ -53,6 +65,10 @@ export function createProviderRegistry(): { getProviderSet(chainId: number): Pro
   const sets = new Map<number, ProviderSet>();
 
   const robinhoodExplorer = createBlockscoutExplorerProvider(robinhoodBlockscoutConfig);
+  const robinhoodLocker = createGenesisLockerProvider({
+    chainId: robinhoodChainId,
+    lockerAddress: robinhoodGenesisLockerAddress
+  });
   sets.set(robinhoodChainId, {
     source: createRobinhoodSourceProvider(),
     explorer: robinhoodExplorer,
@@ -63,9 +79,13 @@ export function createProviderRegistry(): { getProviderSet(chainId: number): Pro
     holder: createBlockscoutHolderProvider(robinhoodBlockscoutConfig),
     liquidity: createRobinhoodLiquidityProvider(
       (address) => robinhoodExplorer.getTokenPriceUsd({ chainId: robinhoodChainId, address }),
-      createUnsupportedLockerProvider()
+      robinhoodLocker
     ),
-    locker: createUnsupportedLockerProvider()
+    locker: robinhoodLocker,
+    launchpad: createGenesisPadLaunchProvider({
+      chainId: robinhoodChainId,
+      registryAddress: robinhoodGenesisLaunchRegistryAddress
+    })
   });
 
   return {
