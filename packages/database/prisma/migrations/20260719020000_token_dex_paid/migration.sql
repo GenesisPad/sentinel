@@ -1,0 +1,1 @@
+ALTER TABLE "Token" ADD COLUMN "dexPaid" BOOLEAN;

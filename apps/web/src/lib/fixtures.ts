@@ -187,6 +187,29 @@ export function buildFixtureReport(chainId: ChainId, address: string): ScanRepor
       holderCount: 2341,
       clusteredWithDeployer: 3
     },
+    walletCluster: [
+      {
+        type: "DEPLOYED_BY",
+        address: DEMO_ADDRESS,
+        confidence: "high",
+        evidence: "Explorer token profile reports this address as the contract deployer.",
+        source: "explorer-token-profile"
+      },
+      {
+        type: "TRANSFERRED_SUPPLY_TO",
+        address: "0x00000000000000000000000000000000000d31",
+        confidence: "high",
+        evidence: "This token's deployer transferred ~18.0% of total supply to this address.",
+        source: "erc20-transfer-log-scan"
+      },
+      {
+        type: "FUNDED_BY",
+        address: "0x00000000000000000000000000000000000f42",
+        confidence: "medium",
+        evidence: "Earliest inbound native-value transfer found within the bounded window came from this wallet.",
+        source: "blockscout-transaction-history"
+      }
+    ],
     scannerVersion: "v1.4.0",
     block: 18429311,
     dataSource: "Robinhood RPC",

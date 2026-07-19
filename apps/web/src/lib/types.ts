@@ -114,6 +114,24 @@ export interface HolderInfo {
   clusteredWithDeployer?: number;
 }
 
+export type WalletClusterEdgeType =
+  | "FUNDED_BY"
+  | "DEPLOYED_BY"
+  | "OWNED_BY"
+  | "PREVIOUSLY_OWNED_BY"
+  | "SHARED_BYTECODE"
+  | "TRANSFERRED_SUPPLY_TO";
+
+/** One real, evidenced wallet-relationship edge (Milestone 6) — never inferred from timing
+ * coincidence. Mirrors the backend's RelatedWalletEdge shape for the web layer. */
+export interface WalletClusterEdge {
+  type: WalletClusterEdgeType;
+  address: string;
+  confidence: "low" | "medium" | "high";
+  evidence: string;
+  source: string;
+}
+
 export interface ContractControls {
   ownershipRenounced: boolean | null;
   canMint: boolean | null;
@@ -150,6 +168,9 @@ export interface TokenMeta {
   tokenType?: string;
   iconUrl?: string;
   reputation?: string;
+  /** Whether DexScreener reports an approved "tokenProfile" order for this token — its "DEX
+   * Paid" badge. Undefined when unknown (no market data provider, or the lookup failed). */
+  dexPaid?: boolean;
   ownerAddress?: string;
   ownershipStatus?: OwnershipStatus;
 }
@@ -177,6 +198,8 @@ export interface ScanReport {
   simulation: TradeSimulation;
   liquidity: LiquidityInfo;
   holders: HolderInfo;
+  /** Real, evidenced wallet-relationship edges (Milestone 6) — empty when none were found. */
+  walletCluster: WalletClusterEdge[];
   scannerVersion: string;
   block: number | null;
   dataSource: string;

@@ -19,7 +19,9 @@ import type {
   ScanStageKey,
   Severity,
   TokenMeta,
-  TradeSimulation
+  TradeSimulation,
+  WalletClusterEdge,
+  WalletClusterEdgeType
 } from "./types";
 
 const STAGE_DEFS: Array<{ key: ScanStageKey; label: string; state: ScanState }> = [
@@ -96,8 +98,16 @@ const SEVERITY_MAP: Record<string, Severity> = {
   INFO: "info"
 };
 
-function mapFinding(finding: SecurityFindingView): Finding {
+function mapFinding(finding: SecurityFindingView, tokenAddress: string): Finding {
   const firstEvidence = finding.evidence[0];
+  // Evidence `address` is "the contract this evidence pertains to" — for source-code pattern
+  // matches and most on-chain reads that's just the scanned token itself, which is meaningless
+  // as a "Controller" label (it doesn't identify who/what actually controls the behavior).
+  // Only surface it when it's a genuinely different address (an owner, a related wallet, etc).
+  const controllerAddress =
+    firstEvidence?.address && firstEvidence.address.toLowerCase() !== tokenAddress.toLowerCase()
+      ? firstEvidence.address
+      : undefined;
   return {
     id: finding.id,
     severity: SEVERITY_MAP[finding.severity] ?? "info",
@@ -105,7 +115,7 @@ function mapFinding(finding: SecurityFindingView): Finding {
     summary: finding.description,
     detail: finding.description,
     technical: finding.technicalExplanation,
-    controller: firstEvidence?.address,
+    controller: controllerAddress,
     block: firstEvidence?.blockNumber ? Number(firstEvidence.blockNumber) : undefined,
     confidence: finding.confidence.toLowerCase() as "low" | "medium" | "high",
     recommendation: finding.recommendation,
@@ -285,6 +295,50 @@ function mapHolders(view: ScanResultView): HolderInfo {
   };
 }
 
+const WALLET_CLUSTER_EDGE_TYPES = new Set<WalletClusterEdgeType>([
+  "FUNDED_BY",
+  "DEPLOYED_BY",
+  "OWNED_BY",
+  "PREVIOUSLY_OWNED_BY",
+  "SHARED_BYTECODE",
+  "TRANSFERRED_SUPPLY_TO",
+]);
+
+/** The full related-wallet edge list lives in the WALLET_CLUSTERING_EDGES_FOUND detector
+ * check's evidence (deployerHistoryDetector, packages/security-engine) — not reduced anywhere
+ * upstream, so this is the one place that has to parse it out of an untyped evidence blob. */
+function extractWalletCluster(checks: ScanResultView["detectorChecks"]): WalletClusterEdge[] {
+  const check = checks.find((c) => c.code === "WALLET_CLUSTERING_EDGES_FOUND");
+  const rawEdges = check?.evidence[0]?.data.edges;
+  if (!Array.isArray(rawEdges)) return [];
+
+  return rawEdges.flatMap((raw): WalletClusterEdge[] => {
+    if (typeof raw !== "object" || raw === null) return [];
+    const record = raw as Record<string, unknown>;
+    const { type, address, confidence, evidence, source } = record;
+    if (
+      typeof type !== "string" ||
+      !WALLET_CLUSTER_EDGE_TYPES.has(type as WalletClusterEdgeType) ||
+      typeof address !== "string" ||
+      typeof confidence !== "string" ||
+      typeof evidence !== "string" ||
+      typeof source !== "string"
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        type: type as WalletClusterEdgeType,
+        address,
+        confidence: confidence.toLowerCase() as "low" | "medium" | "high",
+        evidence,
+        source,
+      },
+    ];
+  });
+}
+
 /**
  * Best-effort token identity. The API only exposes name/symbol/decimals publicly when the
  * ERC-20 metadata detector produced a finding (i.e. metadata was *incomplete*) — a fully
@@ -318,6 +372,7 @@ function deriveTokenMeta(
     tokenType: view.token.tokenType,
     iconUrl: view.token.iconUrl,
     reputation: view.token.reputation,
+    dexPaid: view.token.dexPaid,
     ownerAddress: view.token.ownerAddress,
     ownershipStatus:
       view.token.ownershipStatus === "RENOUNCED"
@@ -391,11 +446,12 @@ export function mapResultToReport(view: ScanResultView): ScanReport {
       passed: countPassed(view)
     },
     stages: deriveStages(view.scan.state),
-    findings: view.findings.map(mapFinding),
+    findings: view.findings.map((finding) => mapFinding(finding, view.scan.address)),
     controls: deriveControls(view.findings, view.scan.state, token.ownershipStatus),
     simulation: mapSimulations(view.simulations),
     liquidity: mapLiquidity(view),
     holders: mapHolders(view),
+    walletCluster: extractWalletCluster(view.detectorChecks ?? []),
     scannerVersion: view.scan.scannerVersion,
     block: view.scan.scanBlockNumber ? Number(view.scan.scanBlockNumber) : null,
     dataSource: `${chainByNumericId(view.scan.chainId)?.label ?? "Chain"} RPC`,

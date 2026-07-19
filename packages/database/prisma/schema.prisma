@@ -119,6 +119,10 @@ model Token {
   priceUsd          String?
   marketCapUsd      String?
   volume24hUsd      String?
+  /// Whether DexScreener reports an approved "tokenProfile" (enhanced token info) order for
+  /// this address — the real, documented meaning of the "DEX Paid" badge shown on DexScreener
+  /// itself. Null when unknown (no market provider configured, or the lookup failed).
+  dexPaid           Boolean?
   metadataBlock     BigInt?
   metadataUpdatedAt DateTime?
   createdAt         DateTime  @default(now())

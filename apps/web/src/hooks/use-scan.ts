@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createScan,
+  getExistingTokenReport,
   getScan,
   getScanReport,
   type ApiError,
@@ -25,12 +26,34 @@ export function useScan() {
   const tickRef = useRef(0);
 
   const submit = useMutation({
-    mutationFn: (args: CreateScanArgs) => createScan(args),
-    onSuccess: (job) => {
+    // "Scan Token" means "show me this token's current state" — for a token that's already
+    // been scanned, that's the latest persisted result, not a brand-new scan pinned behind the
+    // same stale idempotency key every subsequent visit would otherwise resolve to. Only an
+    // explicit `fresh: true` (the Rerun button) forces a genuinely new scan.
+    mutationFn: async (args: CreateScanArgs) => {
+      if (!args.fresh) {
+        const existing = await getExistingTokenReport(args.chainId ?? "robinhood", args.address);
+        if (existing) return { kind: "existing" as const, report: existing };
+      }
+      return { kind: "job" as const, job: await createScan(args) };
+    },
+    onSuccess: (result) => {
       tickRef.current = 0;
       setPollTick(0);
-      setActiveScan(job.scanId);
-      queryClient.setQueryData(["scan", job.scanId], job);
+      if (result.kind === "existing") {
+        const { report } = result;
+        setActiveScan(report.scanId);
+        queryClient.setQueryData(["scan", report.scanId], {
+          scanId: report.scanId,
+          status: report.status,
+          stages: report.stages,
+          token: report.token,
+        });
+        queryClient.setQueryData(["scan-report", report.scanId], report);
+      } else {
+        setActiveScan(result.job.scanId);
+        queryClient.setQueryData(["scan", result.job.scanId], result.job);
+      }
     },
   });
 

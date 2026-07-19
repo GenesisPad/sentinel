@@ -21,6 +21,7 @@ import { DetectorChecksTable } from "@/components/detector-checks-table";
 import { TradingSimulation } from "@/components/trading-simulation";
 import { LiquidityCard } from "@/components/liquidity-card";
 import { HolderConcentration } from "@/components/holder-concentration";
+import { WalletClusterGraph } from "@/components/wallet-cluster-graph";
 import { ScanMetadata } from "@/components/scan-metadata";
 import { ShareMenu } from "@/components/share-menu";
 
@@ -32,6 +33,7 @@ const TRADER_SECTIONS = [
   { id: "sim", label: "Trading simulation" },
   { id: "liquidity", label: "Liquidity" },
   { id: "holders", label: "Holders" },
+  { id: "wallet-cluster", label: "Connected wallets" },
   { id: "metadata", label: "Scan metadata" },
 ];
 
@@ -43,6 +45,7 @@ const TECHNICAL_SECTIONS = [
   { id: "sim", label: "Trading simulation" },
   { id: "liquidity", label: "Liquidity pool" },
   { id: "holders", label: "Holder analysis" },
+  { id: "wallet-cluster", label: "Connected wallets" },
   { id: "metadata", label: "Scan metadata" },
 ];
 
@@ -170,6 +173,10 @@ function TraderSections({ report }: { report: ScanReport }) {
         <div className="max-w-xl"><HolderConcentration holders={report.holders} /></div>
       </Section>
 
+      <Section id="wallet-cluster" title="Connected wallets" subtitle="Real, evidenced wallet relationships — never inferred from timing coincidence.">
+        <WalletClusterGraph tokenSymbol={report.token.symbol} tokenAddress={report.token.address} edges={report.walletCluster} />
+      </Section>
+
       <Section id="metadata" title="Scan metadata">
         <ScanMetadata report={report} />
         <div className="mt-5"><ShareMenu report={report} /></div>
@@ -207,6 +214,10 @@ function TechnicalSections({ report }: { report: ScanReport }) {
 
       <Section id="holders" title="Holder analysis" subtitle="Excluding pools">
         <div className="max-w-xl"><HolderConcentration holders={report.holders} /></div>
+      </Section>
+
+      <Section id="wallet-cluster" title="Connected wallets" subtitle="Real, evidenced wallet relationships — never inferred from timing coincidence.">
+        <WalletClusterGraph tokenSymbol={report.token.symbol} tokenAddress={report.token.address} edges={report.walletCluster} />
       </Section>
 
       <Section id="metadata" title="Scan metadata">

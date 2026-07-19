@@ -36,20 +36,37 @@ export function TokenHeader({
   }
 
   const avatar = size === "lg" ? "size-16" : size === "sm" ? "size-11" : "size-14";
+  const [failedIconAddress, setFailedIconAddress] = useState<string | null>(null);
+  const showIcon = !!token.iconUrl && failedIconAddress !== token.address;
 
   return (
     <div className={cn("flex items-center gap-4", className)}>
       <div
         className={cn(
-          "flex shrink-0 items-center justify-center rounded-full border-2 bg-[#0e1a06]",
+          "flex shrink-0 items-center justify-center overflow-hidden rounded-full border-2 bg-[#0e1a06]",
           avatar,
         )}
         style={{ borderColor: "#b4f11f" }}
         aria-hidden
       >
-        <svg viewBox="0 0 34 34" className="size-1/2">
-          <path d="M17 6 L26 11 L17 28 L8 11 Z" fill="#b4f11f" />
-        </svg>
+        {showIcon ? (
+          // Plain <img>, not next/image: token icon URLs come from arbitrary third-party
+          // sources (Blockscout, DexScreener) that can't be allowlisted in next.config ahead of
+          // time. Falls back to the placeholder mark on load failure.
+          <img
+            key={token.address}
+            src={token.iconUrl}
+            alt=""
+            className="size-full object-cover"
+            referrerPolicy="no-referrer"
+            loading="lazy"
+            onError={() => setFailedIconAddress(token.address)}
+          />
+        ) : (
+          <svg viewBox="0 0 34 34" className="size-1/2">
+            <path d="M17 6 L26 11 L17 28 L8 11 Z" fill="#b4f11f" />
+          </svg>
+        )}
       </div>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
@@ -76,6 +93,8 @@ export function TokenHeader({
           <span className="font-mono text-xs">{shortAddress(token.address)}</span>
           {token.verified === true ? <span className="text-primary">Verified</span> : null}
           {token.verified === false ? <span className="text-warn">Unverified</span> : null}
+          {token.dexPaid === true ? <span className="text-primary">Dex · Paid</span> : null}
+          {token.dexPaid === false ? <span className="text-faint">Dex · Not Paid</span> : null}
         </div>
         {profileFacts.length > 0 ? (
           <p className="mt-1 text-xs text-faint">

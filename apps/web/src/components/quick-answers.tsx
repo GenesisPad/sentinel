@@ -64,7 +64,18 @@ function buildAnswers(report: ScanReport): Answer[] {
         }
       : null,
     liquidity.totalUsd != null
-      ? { question: "Liquidity", value: formatUsd(liquidity.totalUsd), tone: "info" }
+      ? {
+          question: "Liquidity",
+          value: formatUsd(liquidity.totalUsd),
+          tone: healthTierTone(liquidity.healthTier),
+          detail: liquidity.healthTier
+            ? `${HEALTH_TIER_LABEL[liquidity.healthTier]}${
+                liquidity.quoteSidePctOfMarketCap != null
+                  ? ` (${liquidity.quoteSidePctOfMarketCap.toFixed(1)}% of mcap)`
+                  : ""
+              }`
+            : undefined,
+        }
       : null,
     lpLockedAnswer(liquidity.locked, liquidity.burnedPct),
     ownerAnswer(controls.ownershipRenounced),
@@ -73,6 +84,9 @@ function buildAnswers(report: ScanReport): Answer[] {
       : null,
     token.marketCapUsd
       ? { question: "Market cap", value: formatUsd(Number(token.marketCapUsd)), tone: "info" }
+      : null,
+    token.volume24hUsd
+      ? { question: "24h volume", value: formatUsd(Number(token.volume24hUsd)), tone: "info" }
       : null,
     token.createdAt ? { question: "Token age", value: timeAgoLabel(token.createdAt), tone: "info" } : null,
   ]);
@@ -103,6 +117,19 @@ function ownerAnswer(ownershipRenounced: boolean | null): Answer | null {
   return ownershipRenounced
     ? { question: "Owner", value: "Renounced", tone: "good" }
     : { question: "Owner", value: "Active", tone: "warn" };
+}
+
+const HEALTH_TIER_LABEL: Record<"low" | "medium" | "healthy", string> = {
+  low: "Low",
+  medium: "Medium",
+  healthy: "Healthy",
+};
+
+function healthTierTone(tier: "low" | "medium" | "healthy" | null | undefined): Tone {
+  if (tier === "healthy") return "good";
+  if (tier === "medium") return "warn";
+  if (tier === "low") return "bad";
+  return "info";
 }
 
 function taxTone(sellTaxBps?: number): Tone {

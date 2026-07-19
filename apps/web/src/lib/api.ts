@@ -106,24 +106,36 @@ export async function getScanReport(scanId: string): Promise<ScanReport> {
 }
 
 /**
- * Canonical report for the public /token/:chainId/:address page. Reads the token's latest scan
- * result directly (GET /v1/tokens/:chainId/:address) so the page reflects current state instead
- * of being pinned forever to whichever scan the deterministic (non-fresh) idempotency key first
- * resolved to. Only creates a new scan when no scan has ever run for this token (404).
+ * GET /v1/tokens/:chainId/:address — the token's latest scan result, or null when no scan has
+ * ever run for it (404). Never creates a scan itself; callers decide what "no scan yet" means
+ * for their flow.
  */
-export async function getTokenReport(chainId: ChainId, address: string): Promise<ScanReport> {
-  if (USE_FIXTURES) return buildFixtureReport(chainId, address);
+export async function getExistingTokenReport(chainId: ChainId, address: string): Promise<ScanReport | null> {
+  if (USE_FIXTURES) return null;
   const numeric = numericChainId(chainId);
   try {
     const json = await request(`/tokens/${numeric}/${address}`);
     return mapResultToReport(json as ScanResultView);
   } catch (error) {
     if (error instanceof ApiError && error.code === "not_found") {
-      const job = await createScan({ address, chainId });
-      return getScanReport(job.scanId);
+      return null;
     }
     throw error;
   }
+}
+
+/**
+ * Canonical report for the public /token/:chainId/:address page. Reads the token's latest scan
+ * result directly so the page reflects current state instead of being pinned forever to
+ * whichever scan the deterministic (non-fresh) idempotency key first resolved to. Only creates a
+ * new scan when no scan has ever run for this token.
+ */
+export async function getTokenReport(chainId: ChainId, address: string): Promise<ScanReport> {
+  if (USE_FIXTURES) return buildFixtureReport(chainId, address);
+  const existing = await getExistingTokenReport(chainId, address);
+  if (existing) return existing;
+  const job = await createScan({ address, chainId });
+  return getScanReport(job.scanId);
 }
 
 /** GET /v1/scans/recent — public "recent detections" feed. */

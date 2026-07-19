@@ -123,6 +123,9 @@ export interface MarketProfile {
   volume24hUsd: string | null;
   liquidityUsd: number | null;
   pairCreatedAt: Date | null;
+  /** Whether DexScreener reports an approved "tokenProfile" order for this token — the
+   * documented meaning of its "DEX Paid" badge. Null when the lookup is unavailable/failed. */
+  dexPaid: boolean | null;
 }
 
 export interface MarketDataProvider {

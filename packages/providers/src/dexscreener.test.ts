@@ -11,6 +11,12 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
+function fetchUrl(input: string | URL | Request): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
 describe("createDexScreenerMarketDataProvider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -56,5 +62,84 @@ describe("createDexScreenerMarketDataProvider", () => {
     const provider = createDexScreenerMarketDataProvider(config);
     const result = await provider.getMarketProfile({ chainId: 4663, address: tokenAddress });
     expect(result).toBeNull();
+  });
+
+  it("reports dexPaid true only when an approved tokenProfile order exists", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
+      if (url.includes("/orders/")) {
+        return Promise.resolve(
+          jsonResponse({
+            orders: [{ type: "tokenProfile", status: "approved" }],
+            boosts: []
+          })
+        );
+      }
+      return Promise.resolve(
+        jsonResponse([
+          {
+            baseToken: { address: tokenAddress, name: "Token", symbol: "TOK" },
+            liquidity: { usd: 50000 },
+            priceUsd: "1.5"
+          }
+        ])
+      );
+    });
+
+    const provider = createDexScreenerMarketDataProvider(config);
+    const result = await provider.getMarketProfile({ chainId: 4663, address: tokenAddress });
+
+    expect(result?.dexPaid).toBe(true);
+  });
+
+  it("reports dexPaid false when orders exist but none are an approved tokenProfile", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
+      if (url.includes("/orders/")) {
+        return Promise.resolve(
+          jsonResponse({
+            orders: [{ type: "tokenProfile", status: "cancelled" }],
+            boosts: []
+          })
+        );
+      }
+      return Promise.resolve(
+        jsonResponse([
+          {
+            baseToken: { address: tokenAddress, name: "Token", symbol: "TOK" },
+            liquidity: { usd: 50000 },
+            priceUsd: "1.5"
+          }
+        ])
+      );
+    });
+
+    const provider = createDexScreenerMarketDataProvider(config);
+    const result = await provider.getMarketProfile({ chainId: 4663, address: tokenAddress });
+
+    expect(result?.dexPaid).toBe(false);
+  });
+
+  it("reports dexPaid null when the orders lookup fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
+      if (url.includes("/orders/")) {
+        return Promise.reject(new Error("network error"));
+      }
+      return Promise.resolve(
+        jsonResponse([
+          {
+            baseToken: { address: tokenAddress, name: "Token", symbol: "TOK" },
+            liquidity: { usd: 50000 },
+            priceUsd: "1.5"
+          }
+        ])
+      );
+    });
+
+    const provider = createDexScreenerMarketDataProvider(config);
+    const result = await provider.getMarketProfile({ chainId: 4663, address: tokenAddress });
+
+    expect(result?.dexPaid).toBeNull();
   });
 });

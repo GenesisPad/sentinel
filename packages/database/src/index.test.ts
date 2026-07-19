@@ -212,6 +212,7 @@ describe("database readiness", () => {
         priceUsd: "1.25",
         marketCapUsd: "1250000",
         volume24hUsd: "50000",
+        dexPaid: true,
         metadataBlock: 123n,
         metadataUpdatedAt: new Date("2026-07-11T00:00:00.000Z"),
         createdAt: new Date("2026-07-11T00:00:00.000Z"),

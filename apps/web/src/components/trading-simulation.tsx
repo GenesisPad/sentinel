@@ -18,6 +18,15 @@ export function TradingSimulation({ sim }: { sim: TradeSimulation }) {
   ].filter((stat): stat is { label: string; value: string; hex: string } => stat !== null);
   const visibleResults = sim.results.filter((r) => r.status !== "inconclusive" || r.detail);
 
+  // What investors actually need is a direct Honeypot Yes/No answer, not "Buy simulation:
+  // Passed" — the pass/fail rows still carry useful supporting detail, so they stay, but the
+  // honeypot verdict leads.
+  const capabilityLabel: Record<(typeof visibleResults)[number]["label"], string> = {
+    "Buy simulation": "Can buy",
+    "Sell simulation": "Can sell",
+    "Transfer simulation": "Can transfer",
+  };
+
   return (
     <div className="flex flex-col gap-4">
       {sim.isHoneypot != null ? (
@@ -29,7 +38,7 @@ export function TradingSimulation({ sim }: { sim: TradeSimulation }) {
               : { color: "#37d67a", background: "rgba(55,214,122,0.1)", border: "1px solid rgba(55,214,122,0.3)" }
           }
         >
-          {sim.isHoneypot ? "Honeypot behavior detected" : "No honeypot behavior detected"}
+          {sim.isHoneypot ? "Honeypot: Yes" : "Honeypot: No"}
         </div>
       ) : null}
 
@@ -37,15 +46,17 @@ export function TradingSimulation({ sim }: { sim: TradeSimulation }) {
         <div className="flex flex-col gap-2">
           {visibleResults.map((r) => {
             const s = STATUS[r.status];
+            const label = capabilityLabel[r.label] ?? r.label;
+            const verdict = r.status === "passed" ? "Yes" : r.status === "failed" ? "No" : "Unclear";
             return (
               <div
                 key={r.label}
                 className="flex items-center justify-between rounded-lg border border-border bg-surface-deep px-3.5 py-2.5"
               >
-                <span className="text-sm font-semibold text-secondary">{r.label}</span>
+                <span className="text-sm font-semibold text-secondary">{label}</span>
                 <span className="inline-flex items-center gap-2 text-sm font-bold" style={{ color: s.hex }}>
                   <s.Icon className="size-4" aria-hidden />
-                  {r.status === "passed" ? "Passed" : r.status === "failed" ? "Failed" : "Inconclusive"}
+                  {verdict}
                   {r.detail ? <span className="font-medium text-muted">· {r.detail}</span> : null}
                 </span>
               </div>

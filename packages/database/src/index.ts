@@ -193,6 +193,7 @@ export interface RecordTokenProfileInput {
   priceUsd?: string | null;
   marketCapUsd?: string | null;
   volume24hUsd?: string | null;
+  dexPaid?: boolean | null;
 }
 
 export interface RecordDetectorResultInput {
@@ -597,6 +598,7 @@ export function createScanRepository(db: PrismaDatabase): ScanRepository {
         priceUsd: input.priceUsd ?? null,
         marketCapUsd: input.marketCapUsd ?? null,
         volume24hUsd: input.volume24hUsd ?? null,
+        dexPaid: input.dexPaid ?? null,
         metadataUpdatedAt: now
       };
       const updateData: Prisma.TokenUncheckedUpdateInput = {
@@ -628,6 +630,7 @@ export function createScanRepository(db: PrismaDatabase): ScanRepository {
       if (input.priceUsd !== undefined) updateData.priceUsd = input.priceUsd;
       if (input.marketCapUsd !== undefined) updateData.marketCapUsd = input.marketCapUsd;
       if (input.volume24hUsd !== undefined) updateData.volume24hUsd = input.volume24hUsd;
+      if (input.dexPaid !== undefined) updateData.dexPaid = input.dexPaid;
 
       await db.chain.upsert({
         where: { chainId: input.chainId },
@@ -1358,6 +1361,10 @@ function toTokenProfileView(scan: ScanResultRecord): TokenProfileView {
 
   if (scan.token?.volume24hUsd) {
     profile.volume24hUsd = scan.token.volume24hUsd;
+  }
+
+  if (scan.token?.dexPaid !== null && scan.token?.dexPaid !== undefined) {
+    profile.dexPaid = scan.token.dexPaid;
   }
 
   if (scan.token?.metadataUpdatedAt) {

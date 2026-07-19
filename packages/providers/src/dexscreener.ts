@@ -30,9 +30,10 @@ export function createDexScreenerMarketDataProvider(
         return null;
       }
 
-      const response = await fetchJson(
-        `https://api.dexscreener.com/token-pairs/v1/${config.networkSlug}/${address}`
-      );
+      const [response, dexPaid] = await Promise.all([
+        fetchJson(`https://api.dexscreener.com/token-pairs/v1/${config.networkSlug}/${address}`),
+        fetchDexPaidStatus(config.networkSlug, address)
+      ]);
       if (!Array.isArray(response)) {
         return null;
       }
@@ -69,12 +70,33 @@ export function createDexScreenerMarketDataProvider(
         marketCapUsd: decimalStringValue(bestPair.marketCap) ?? decimalStringValue(bestPair.fdv),
         volume24hUsd: decimalStringValue(volume.h24),
         liquidityUsd: numberValue(liquidity.usd),
-        pairCreatedAt: timestampMsDateValue(bestPair.pairCreatedAt)
+        pairCreatedAt: timestampMsDateValue(bestPair.pairCreatedAt),
+        dexPaid
       };
 
       return profile;
     }
   };
+}
+
+/**
+ * DexScreener's "DEX Paid" badge means the token has an approved "tokenProfile" (enhanced token
+ * info) order — checked via the same endpoint DexScreener's own site uses
+ * (https://api.dexscreener.com/orders/v1/{chainId}/{tokenAddress}), not part of the documented
+ * public API reference but stable and live-verified. Returns null (not false) on any fetch
+ * failure — an unknown paid status is never reported as "not paid".
+ */
+async function fetchDexPaidStatus(networkSlug: string, address: string): Promise<boolean | null> {
+  const response = await fetchJson(
+    `https://api.dexscreener.com/orders/v1/${networkSlug}/${address}`
+  ).catch(() => null);
+  if (!isRecord(response) || !Array.isArray(response.orders)) {
+    return null;
+  }
+
+  return response.orders.some(
+    (order) => isRecord(order) && order.type === "tokenProfile" && order.status === "approved"
+  );
 }
 
 function selectBestPair(pairs: Record<string, unknown>[]): Record<string, unknown> | null {

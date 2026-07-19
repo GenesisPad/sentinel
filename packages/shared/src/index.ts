@@ -244,6 +244,9 @@ export interface TokenProfileView {
   priceUsd?: string;
   marketCapUsd?: string;
   volume24hUsd?: string;
+  /** Whether DexScreener reports an approved "tokenProfile" order for this token — the
+   * documented meaning of its "DEX Paid" badge. Undefined when unknown. */
+  dexPaid?: boolean;
   metadataUpdatedAt?: string;
 }
 

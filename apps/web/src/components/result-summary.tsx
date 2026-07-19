@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { AlertTriangle, ChevronRight, RefreshCcw, ShieldAlert } from "lucide-react";
 import type { ScanReport } from "@/lib/types";
-import { riskFromScore, sortFindings } from "@/lib/risk";
+import { sortFindings } from "@/lib/risk";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TokenHeader } from "@/components/token-header";
@@ -17,7 +17,6 @@ import { ShareMenu } from "@/components/share-menu";
 
 /** Compact result shown inline on the homepage after a scan completes. */
 export function ResultSummary({ report, onFresh, freshBusy = false }: { report: ScanReport; onFresh?: () => void; freshBusy?: boolean }) {
-  const risk = riskFromScore(report.riskScore);
   const tokenPath = `/token/${report.token.chainId}/${report.token.address}`;
   const critical = sortFindings(report.findings).filter((f) => f.severity === "critical");
 
@@ -54,16 +53,22 @@ export function ResultSummary({ report, onFresh, freshBusy = false }: { report: 
       <Card className="grid gap-7 bg-[linear-gradient(180deg,#101311,#0c0e0c)] p-6 md:grid-cols-2 md:items-center">
         <div className="flex flex-col gap-3">
           <TokenHeader token={report.token} size="lg" />
-          {onFresh ? (
-            <button
-              onClick={onFresh}
-              disabled={freshBusy}
-              className="inline-flex w-fit items-center gap-1.5 text-sm font-bold text-primary transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-60"
-            >
-              <RefreshCcw className={freshBusy ? "size-3.5 animate-spin" : "size-3.5"} aria-hidden />
-              {freshBusy ? "Rerunning" : "Rerun scan"}
-            </button>
-          ) : null}
+          <div className="flex flex-wrap items-center gap-4">
+            {onFresh ? (
+              <button
+                onClick={onFresh}
+                disabled={freshBusy}
+                className="inline-flex w-fit items-center gap-1.5 text-sm font-bold text-primary transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-60"
+              >
+                <RefreshCcw className={freshBusy ? "size-3.5 animate-spin" : "size-3.5"} aria-hidden />
+                {freshBusy ? "Rerunning" : "Rerun scan"}
+              </button>
+            ) : null}
+            <Link href={tokenPath} className="inline-flex w-fit items-center gap-1 text-sm font-bold text-primary hover:brightness-110">
+              View Full Report
+              <ChevronRight className="size-3.5" aria-hidden />
+            </Link>
+          </div>
         </div>
         <div>
           <div className="mb-2 flex items-center gap-3">
@@ -84,17 +89,6 @@ export function ResultSummary({ report, onFresh, freshBusy = false }: { report: 
       {/* body */}
       <div className="grid gap-4 lg:grid-cols-[1.15fr_1fr]">
         <div className="flex flex-col gap-4">
-          <Card>
-            <CardContent>
-              <h3 className="mb-3 font-display text-base font-semibold">Why this rating?</h3>
-              <p
-                className="rounded-xl border px-4 py-3 text-[15px] leading-relaxed text-secondary"
-                style={{ borderColor: `${risk.hex}66`, background: `${risk.hex}0f` }}
-              >
-                {report.scoreExplanation}
-              </p>
-            </CardContent>
-          </Card>
           <Card>
             <CardContent>
               <div className="mb-3.5 flex items-center justify-between">

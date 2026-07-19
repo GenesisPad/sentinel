@@ -316,14 +316,18 @@ async function createRobinhoodRouteTradeSimulations(input: {
       : "Route quote only. This confirms pool math and route liquidity, but does not execute a forked buy/sell and cannot prove honeypot or exact transfer tax."
   };
 
-  const buyOutcome =
-    forkResult && !forkResult.canBuy
+  // A real fork run is authoritative and must never be overridden by the lighter static/
+  // route-quote signal — a stale or unrelated static-call revert (e.g. a probe wallet quirk
+  // unrelated to buyability) must not mark a buy FAILED when the fork actually succeeded.
+  const buyOutcome = forkResult
+    ? forkResult.canBuy
+      ? "PASSED"
+      : "FAILED"
+    : buyStaticCall.status === "REVERTED"
       ? "FAILED"
-      : buyStaticCall.status === "REVERTED"
-        ? "FAILED"
-        : buyOutput > 0n
-          ? "PASSED"
-          : "INCONCLUSIVE";
+      : buyOutput > 0n
+        ? "PASSED"
+        : "INCONCLUSIVE";
   const buySimulation: SimulationResult = {
     kind: "BUY",
     outcome: buyOutcome,
@@ -345,20 +349,23 @@ async function createRobinhoodRouteTradeSimulations(input: {
     },
     simulationTool: common.simulationTool
   };
-  if (forkResult && !forkResult.canBuy) {
-    buySimulation.revertReason = forkResult.error ?? "Forked buy transaction failed.";
+  if (forkResult) {
+    if (!forkResult.canBuy) {
+      buySimulation.revertReason = forkResult.error ?? "Forked buy transaction failed.";
+    }
   } else if (buyStaticCall.status === "REVERTED") {
     buySimulation.revertReason = buyStaticCall.reason;
   }
 
-  const sellOutcome =
-    forkResult && !forkResult.canSell
+  const sellOutcome = forkResult
+    ? forkResult.canSell
+      ? "PASSED"
+      : "FAILED"
+    : sellTransferCall.status === "REVERTED"
       ? "FAILED"
-      : sellTransferCall.status === "REVERTED"
-        ? "FAILED"
-        : sellOutput > 0n
-          ? "PASSED"
-          : "INCONCLUSIVE";
+      : sellOutput > 0n
+        ? "PASSED"
+        : "INCONCLUSIVE";
   const sellSimulation: SimulationResult = {
     kind: "SELL",
     outcome: sellOutcome,
@@ -380,8 +387,10 @@ async function createRobinhoodRouteTradeSimulations(input: {
     },
     simulationTool: common.simulationTool
   };
-  if (forkResult && !forkResult.canSell) {
-    sellSimulation.revertReason = forkResult.error ?? "Forked sell transaction failed.";
+  if (forkResult) {
+    if (!forkResult.canSell) {
+      sellSimulation.revertReason = forkResult.error ?? "Forked sell transaction failed.";
+    }
   } else if (sellTransferCall.status === "REVERTED") {
     sellSimulation.revertReason = sellTransferCall.reason;
   }
@@ -1352,7 +1361,8 @@ async function collectTokenProfile(
       reputation: null,
       priceUsd: null,
       marketCapUsd: null,
-      volume24hUsd: null
+      volume24hUsd: null,
+      dexPaid: null
     };
   }
 
@@ -1388,7 +1398,8 @@ async function collectTokenProfile(
     reputation: explorer?.reputation ?? null,
     priceUsd: explorer?.priceUsd ?? market?.priceUsd ?? null,
     marketCapUsd: explorer?.marketCapUsd ?? market?.marketCapUsd ?? null,
-    volume24hUsd: explorer?.volume24hUsd ?? market?.volume24hUsd ?? null
+    volume24hUsd: explorer?.volume24hUsd ?? market?.volume24hUsd ?? null,
+    dexPaid: market?.dexPaid ?? null
   };
 }
 

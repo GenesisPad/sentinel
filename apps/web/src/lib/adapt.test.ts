@@ -291,6 +291,57 @@ describe("mapResultToReport", () => {
 
     expect(report.simulation.isHoneypot).toBeNull();
   });
+
+  it("extracts wallet-clustering edges from the WALLET_CLUSTERING_EDGES_FOUND check", () => {
+    const report = mapResultToReport(
+      baseView({
+        detectorChecks: [
+          {
+            id: "check-1",
+            detectorResultId: "result-1",
+            detectorId: "deployer-history",
+            detectorVersion: "0.1.0",
+            code: "WALLET_CLUSTERING_EDGES_FOUND",
+            outcome: "DETECTED",
+            confidence: "HIGH",
+            evidence: [
+              {
+                type: "EXTERNAL_SOURCE",
+                summary: "Related-wallet edges derived from on-chain evidence",
+                data: {
+                  edges: [
+                    {
+                      type: "TRANSFERRED_SUPPLY_TO",
+                      address: "0x00000000000000000000000000000000000d31",
+                      confidence: "HIGH",
+                      evidence: "Deployer transferred 20% of supply to this address.",
+                      source: "erc20-transfer-log-scan"
+                    },
+                    { type: "NOT_A_REAL_TYPE", address: "0x1", confidence: "HIGH", evidence: "x", source: "y" }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      })
+    );
+
+    expect(report.walletCluster).toEqual([
+      {
+        type: "TRANSFERRED_SUPPLY_TO",
+        address: "0x00000000000000000000000000000000000d31",
+        confidence: "high",
+        evidence: "Deployer transferred 20% of supply to this address.",
+        source: "erc20-transfer-log-scan"
+      }
+    ]);
+  });
+
+  it("returns an empty wallet cluster when no clustering check is present", () => {
+    const report = mapResultToReport(baseView());
+    expect(report.walletCluster).toEqual([]);
+  });
 });
 
 describe("mapProgressToJob", () => {
