@@ -1,6 +1,7 @@
 import { Check, Info, ShieldAlert, X } from "lucide-react";
 import type { ScanReport } from "@/lib/types";
 import { bpsToPct, formatUsd } from "@/lib/utils";
+import { NEGLIGIBLE_LIQUIDITY_USD } from "@/lib/adapt";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type Tone = "good" | "bad" | "warn" | "info";
@@ -98,7 +99,7 @@ function buildAnswers(report: ScanReport): Answer[] {
           hint: `ETH side: ${formatUsd(liquidity.totalUsd / 2)}. This figure is the full pool value (token + paired asset) — health is measured against the paired-asset side alone, since that's what actually backs sell orders.`,
         }
       : null,
-    lpLockedAnswer(liquidity.locked, liquidity.burnedPct),
+    lpLockedAnswer(liquidity.locked, liquidity.burnedPct, liquidity.totalUsd),
     ownerAnswer(controls.ownershipRenounced),
     holders.top10Pct != null
       ? { question: "Top 10 holders", value: `${holders.top10Pct.toFixed(1)}%`, tone: concentrationTone(holders.top10Pct) }
@@ -125,9 +126,26 @@ function honeypotAnswer(isHoneypot: boolean | null): Answer | null {
     : { question: "Honeypot?", value: "Not detected", tone: "good" };
 }
 
-function lpLockedAnswer(locked: boolean | null, burnedPct: number | undefined): Answer | null {
+function lpLockedAnswer(
+  locked: boolean | null,
+  burnedPct: number | undefined,
+  totalUsd: number | null
+): Answer | null {
   const suffix = burnedPct != null ? ` (${burnedPct.toFixed(1)}%)` : "";
   if (locked == null) return null;
+  // A burned/locked LP token only stops someone from calling removeLiquidity() — it does
+  // nothing to stop the reserves themselves being emptied by an ordinary (if enormous) sell.
+  // Showing "Yes" in green next to a pool that's actually down to a few cents reads as a safety
+  // signal it isn't; a real drained pool (verified: $0.18 total liquidity, LP 100% burned since
+  // deployment) still shows "locked" as literally true while being functionally worthless.
+  if (locked && totalUsd != null && totalUsd < NEGLIGIBLE_LIQUIDITY_USD) {
+    return {
+      question: "LP locked / burned",
+      value: `Yes${suffix}`,
+      tone: "bad",
+      detail: "But pool liquidity is negligible now — burning the LP token doesn't stop reserves being sold out.",
+    };
+  }
   return locked
     ? { question: "LP locked / burned", value: `Yes${suffix}`, tone: "good" }
     : { question: "LP locked / burned", value: `No${suffix}`, tone: "bad" };

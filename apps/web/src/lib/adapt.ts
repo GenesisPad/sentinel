@@ -250,7 +250,26 @@ const LIQUIDITY_HEALTH_BRACKETS = [
   { maxMarketCapUsd: Infinity, healthyPct: 10, mediumPct: 5 }
 ] as const;
 
-function liquidityHealthTier(pct: number, marketCapUsd: number | null): "low" | "medium" | "healthy" {
+// Below this absolute dollar figure, liquidity is negligible no matter what the market cap
+// ratio says — there is no market cap for which $50 of real liquidity is "fine" to trade
+// against. This exists because the ratio-based brackets above require a market cap to compute
+// a percentage; a token with no market cap data (e.g. a rugged/dead pool DexScreener no longer
+// prices) would otherwise report healthTier: null — read by the UI as a neutral/unknown color
+// instead of the obvious red flag a near-zero dollar figure actually is. Verified against a
+// real drained pool ($UHOOD): totalLiquidityUsd $0.175, no market cap data, LP 100% burned —
+// the "LP burned" fact is true and irrelevant once the reserves themselves are gone via a huge
+// sell (burning the LP token only prevents removeLiquidity(); it does nothing to stop a normal
+// swap from draining the reserves).
+export const NEGLIGIBLE_LIQUIDITY_USD = 250;
+
+function liquidityHealthTier(
+  totalUsd: number,
+  pct: number | null,
+  marketCapUsd: number | null
+): "low" | "medium" | "healthy" | null {
+  if (totalUsd < NEGLIGIBLE_LIQUIDITY_USD) return "low";
+  if (pct == null) return null;
+
   const bracket =
     marketCapUsd != null
       ? (LIQUIDITY_HEALTH_BRACKETS.find((b) => marketCapUsd < b.maxMarketCapUsd) ??
@@ -301,8 +320,7 @@ function mapLiquidity(view: ScanResultView): LiquidityInfo {
     poolAddress: pool.poolAddress,
     dex: pool.dex ?? undefined,
     quoteSidePctOfMarketCap,
-    healthTier:
-      quoteSidePctOfMarketCap != null ? liquidityHealthTier(quoteSidePctOfMarketCap, marketCapUsd) : null
+    healthTier: totalUsd != null ? liquidityHealthTier(totalUsd, quoteSidePctOfMarketCap, marketCapUsd) : null
   };
 }
 

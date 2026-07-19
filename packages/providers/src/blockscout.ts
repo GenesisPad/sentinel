@@ -174,9 +174,11 @@ export function createBlockscoutExplorerProvider(config: BlockscoutChainConfig):
       // always the real signer; when it differs from creator_address_hash AND the transaction's
       // `to` is itself a contract (i.e. this was a contract call, not a raw EOA deployment), the
       // deployer is a launch factory and the tx sender is the true creator. Verified against a
-      // real GenesisPad `launchToken` transaction: Blockscout tags the `to` address "Launch
-      // Factory" via its Open Labels Initiative metadata, and `from.is_contract` is false (a
-      // genuine EOA) — this generalizes to any launchpad using the same factory-call pattern.
+      // real Noxa Launchpad `launchToken` transaction (a third-party launchpad on Robinhood
+      // Chain, not GenesisPad's own registry-tracked flow — the shared factory address is why
+      // $CASHCAT showed the same pattern): Blockscout tags the `to` address "Launch Factory" via
+      // its Open Labels Initiative metadata, and `from.is_contract` is false (a genuine EOA) —
+      // this generalizes to any launchpad using the same factory-call pattern.
       const deployerAddress = addressValue(addressRecord.creator_address_hash);
       const txFrom = isRecord(creationTxRecord.from) ? creationTxRecord.from : {};
       const txTo = isRecord(creationTxRecord.to) ? creationTxRecord.to : {};

@@ -75,9 +75,10 @@ describe("createBlockscoutExplorerProvider", () => {
   });
 
   it("identifies the real creator when the reported deployer is a launch-factory contract", async () => {
-    // Reproduces a real GenesisPad launchToken transaction: creator_address_hash resolves to
-    // the factory (the immediate CREATE2 caller), but the transaction's own `from` is the real
-    // EOA that signed and paid — that's the true creator, not the factory.
+    // Reproduces a real Noxa Launchpad launchToken transaction (third-party launchpad, not
+    // GenesisPad's own): creator_address_hash resolves to the factory (the immediate CREATE2
+    // caller), but the transaction's own `from` is the real EOA that signed and paid — that's
+    // the true creator, not the factory.
     mockEndpoints({
       creatorAddressHash: "0xd9ec2db5f3d1b236843925949fe5bd8a3836fccb",
       creationTx: {

@@ -11,8 +11,10 @@ detection to other launchpads, and stop generating false/misleading claims.
 ## Context and root causes
 
 **Any factory-mediated token launch misattributes the real creator.** Verified against a real
-GenesisPad `launchToken` transaction the user provided (a raw trace of an actual Robinhood Chain
-launch): the transaction's `to` is the launch-factory contract (Blockscout tags it "Launch
+`launchToken` transaction the user provided (a raw trace of an actual Robinhood Chain launch,
+correction from the user: this is **Noxa Launchpad**, a third-party launchpad — not GenesisPad's
+own registry-tracked flow; it's the same launchpad `$CASHCAT` used, hence the shared factory
+address below): the transaction's `to` is the launch-factory contract (Blockscout tags it "Launch
 Factory" via its Open Labels Initiative metadata), and the factory internally performs the
 `CREATE2` that deploys the token. Blockscout's `creator_address_hash` — what `deployerAddress`
 was built from — reports whoever directly called `CREATE2`, i.e. the factory, never the person

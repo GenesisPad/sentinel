@@ -1005,7 +1005,9 @@ export async function processScanJob(
     // sender when the explorer detected a factory-mediated deployment (deployerIsLaunchFactory) —
     // this generalizes to ANY launchpad, not just GenesisPad, since it's derived from the raw
     // transaction (tx.from vs. tx.to.is_contract), not a specific registry. Verified against a
-    // real GenesisPad launchToken transaction where both signals agree on the same real creator.
+    // real launchpad's launchToken transaction (Noxa Launchpad — also used by $CASHCAT, hence
+    // the shared factory address — a third-party launchpad, not GenesisPad's own registry-
+    // tracked launch flow) where both signals agree on the same real creator.
     const correctedDeployerAddress =
       genesispadLaunch?.originalCreator ??
       (tokenProfile.deployerIsLaunchFactory ? tokenProfile.creationTxSenderAddress : null);

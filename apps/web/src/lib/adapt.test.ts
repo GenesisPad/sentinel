@@ -192,6 +192,32 @@ describe("mapResultToReport", () => {
     expect(report.liquidity.poolAddress).toBe("0x2222222222222222222222222222222222222222");
   });
 
+  it("flags negligible liquidity as low health even when market cap is unavailable", () => {
+    // Reproduces a real drained pool ($UHOOD): totalLiquidityUsd $0.175, LP 100% burned, and no
+    // market cap data (DexScreener has nothing to price once a pool is this dead) — the ratio
+    // math this tier normally relies on can't run, but $0.18 is catastrophic on its own. Without
+    // this floor, healthTier stayed null and the UI showed a neutral (not red) liquidity tone.
+    const report = mapResultToReport(
+      baseView({
+        liquidity: {
+          status: "AVAILABLE",
+          message: "Persisted liquidity pools are available for this token.",
+          pools: [
+            {
+              chainId: 4663,
+              tokenAddress: ADDRESS,
+              poolAddress: "0x4444444444444444444444444444444444444444",
+              dex: "Uniswap V2",
+              liquidityData: { totalLiquidityUsd: 0.175, lpBurnedOrLockedPct: 100 }
+            }
+          ]
+        }
+      })
+    );
+    expect(report.liquidity.healthTier).toBe("low");
+    expect(report.liquidity.locked).toBe(true);
+  });
+
   it("applies stricter liquidity-health thresholds to an ultra-low-cap token than a mid-cap one", () => {
     // Same 15% quote-side liquidity reads differently depending on market cap: "medium" for an
     // ultra-low-cap token (needs >=20% to be healthy, per the launchpad-depth cheatsheet) but
