@@ -22,6 +22,10 @@ export interface LockStatusResult {
 
 export interface LockerProvider {
   readonly id: string;
+  /** The locker contract's own address, when this chain has a real one wired — lets callers
+   * recognize "the deployer sent supply to the locker" as a locking action, not a wallet
+   * transfer, without needing a separate registry of known-good infrastructure addresses. */
+  readonly lockerAddress?: `0x${string}` | null;
   supportsChain(chainId: number): boolean;
   getLockStatus(input: {
     adapter: ChainAdapter;
@@ -33,6 +37,7 @@ export interface LockerProvider {
 export function createUnsupportedLockerProvider(): LockerProvider {
   return {
     id: "unsupported-locker",
+    lockerAddress: null,
     supportsChain: () => false,
     async getLockStatus() {
       await Promise.resolve();

@@ -952,6 +952,37 @@ describe("deployer history detector", () => {
     ).toBe(true);
   });
 
+  it("aggregates multiple TRANSFERRED_SUPPLY_TO edges into one finding instead of stacking severity", async () => {
+    // Reproduces a real scoring bug found on $GEN: 6 separate recipients each produced their own
+    // MEDIUM SUPPLY_TRANSFERRED_TO_WALLET finding, and scoreFindings sums same-category findings
+    // — 6 x MEDIUM pushed DISTRIBUTION_RISK to a capped 100 (CRITICAL), regardless of whether any
+    // individual recipient was actually concerning. One finding, carrying every recipient in its
+    // evidence, reports the same fact without multiplying score weight by recipient count.
+    const edges: Array<{
+      type: "TRANSFERRED_SUPPLY_TO";
+      address: `0x${string}`;
+      confidence: "HIGH" | "MEDIUM" | "LOW";
+      evidence: string;
+      source: string;
+    }> = Array.from({ length: 6 }, (_, i) => ({
+      type: "TRANSFERRED_SUPPLY_TO",
+      address: `0x000000000000000000000000000000000000${(10 + i).toString(16)}` as `0x${string}`,
+      confidence: "HIGH",
+      evidence: `Deployer transferred ~4.0% of total supply to this address (block ${100 + i}).`,
+      source: "erc20-transfer-log-scan"
+    }));
+
+    const result = await deployerHistoryDetector.run(
+      { deployerHistory: null, bytecodeReuse: null, relatedWalletEdges: edges },
+      context
+    );
+
+    const supplyFindings = result.findings.filter((f) => f.code === "SUPPLY_TRANSFERRED_TO_WALLET");
+    expect(supplyFindings).toHaveLength(1);
+    expect(supplyFindings[0]?.severity).toBe("MEDIUM");
+    expect((supplyFindings[0]?.evidence[0]?.data as { edges: unknown[] }).edges).toHaveLength(6);
+  });
+
   it("reports a FUNDED_BY edge as informational, not a risk verdict", async () => {
     const result = await deployerHistoryDetector.run(
       {

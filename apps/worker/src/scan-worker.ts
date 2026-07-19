@@ -624,9 +624,10 @@ async function buildRelatedWalletEdges(input: {
   ownerAddress: `0x${string}` | null;
   totalSupply: string | null;
   bytecodeReuse: BytecodeReuseView | null;
-  /** Addresses (lowercased) of this token's own discovered liquidity pools — supply sent here
-   * is the deployer seeding the pool, not a wallet relationship, and must never be reported as
-   * a "transferred supply to a wallet" finding. */
+  /** Addresses (lowercased) of this token's own discovered liquidity pools and the chain's real
+   * locker contract — supply sent here is the deployer seeding the pool or locking tokens, not
+   * a wallet relationship, and must never be reported as a "transferred supply to a wallet"
+   * finding. */
   knownPoolAddresses: Set<string>;
 }): Promise<RelatedWalletEdge[]> {
   const edges: RelatedWalletEdge[] = [];
@@ -1043,8 +1044,16 @@ export async function processScanJob(
           .discoverPools({ adapter, chainId: target.chainId, tokenAddress: target.address, blockNumber })
           .catch(() => null)
       : null;
-    const knownPoolAddresses = new Set(
-      (discoveredPools ?? []).map((pool) => pool.poolAddress.toLowerCase())
+    // Also excludes the chain's real locker contract (e.g. Genesis Locker) when one is wired —
+    // the deployer sending supply there is a locking action, not a wallet transfer. Verified
+    // against a real false positive ($GEN): ~1% of supply sent to the name-tagged GenesisLocker
+    // contract was being reported as "transferred to another wallet" alongside genuinely
+    // unlabeled recipients, when it's the opposite of a risk.
+    const knownInfrastructureAddresses = new Set(
+      [
+        ...(discoveredPools ?? []).map((pool) => pool.poolAddress.toLowerCase()),
+        ...(providers?.locker.lockerAddress ? [providers.locker.lockerAddress.toLowerCase()] : [])
+      ]
     );
     const relatedWalletEdges = await buildRelatedWalletEdges({
       adapter,
@@ -1056,7 +1065,7 @@ export async function processScanJob(
       ownerAddress: ownerAddressForEdges,
       totalSupply: tokenProfile.totalSupply,
       bytecodeReuse,
-      knownPoolAddresses
+      knownPoolAddresses: knownInfrastructureAddresses
     });
     const deployerHistoryResult = await deployerHistoryDetector.run(
       { deployerHistory, bytecodeReuse, relatedWalletEdges },

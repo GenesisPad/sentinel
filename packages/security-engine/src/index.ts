@@ -1485,24 +1485,52 @@ export const deployerHistoryDetector: SecurityDetector<DeployerHistoryDetectorIn
         evidence: [edgeEvidence]
       });
 
+      // One finding per recipient, summed by category, meant N transfers (e.g. N early bonding-
+      // curve buyers, or N pool/locker addresses the pool-address filter didn't already catch)
+      // could linearly inflate DISTRIBUTION_RISK to CRITICAL regardless of whether any single
+      // recipient was actually concerning (verified against a real case, $GEN: 5 transfers of
+      // ~4-5% each summed 6 x MEDIUM into a capped 100/CRITICAL score). Emitting exactly one
+      // finding — still carrying every recipient in its evidence, so nothing is hidden — reports
+      // the same underlying fact without multiplying its score weight by however many recipients
+      // happened to be found.
+      const supplyTransferEdges = input.relatedWalletEdges.filter(
+        (edge) => edge.type === "TRANSFERRED_SUPPLY_TO"
+      );
+      if (supplyTransferEdges.length > 0) {
+        const supplyTransferEvidence: FindingEvidence = {
+          type: "EXTERNAL_SOURCE",
+          summary: "Supply transfers from the deployer to other wallets, never timing coincidence",
+          address: context.address,
+          data: { edges: supplyTransferEdges }
+        };
+        if (context.blockNumber !== undefined) {
+          supplyTransferEvidence.blockNumber = context.blockNumber;
+        }
+        findings.push(
+          createFinding({
+            code: "SUPPLY_TRANSFERRED_TO_WALLET",
+            detector: this.metadata,
+            title:
+              supplyTransferEdges.length === 1
+                ? "Deployer transferred a significant share of supply to another wallet"
+                : `Deployer transferred supply to ${supplyTransferEdges.length} other wallets`,
+            severity: "MEDIUM",
+            category: "DISTRIBUTION_RISK",
+            confidence: strongestConfidence(supplyTransferEdges.map((edge) => edge.confidence)),
+            description:
+              supplyTransferEdges.length === 1
+                ? `${supplyTransferEdges[0]?.evidence} (${supplyTransferEdges[0]?.address})`
+                : `The deployer transferred supply to ${supplyTransferEdges.length} other wallets. See evidence for each recipient and its share.`,
+            technicalExplanation: "Edge type TRANSFERRED_SUPPLY_TO, source: erc20-transfer-log-scan.",
+            evidence: [supplyTransferEvidence],
+            recommendation:
+              "Review each recipient in evidence: is it a known team/vesting/exchange wallet, a legitimate early buyer, or an unexplained large holder?"
+          })
+        );
+      }
+
       for (const edge of input.relatedWalletEdges) {
-        if (edge.type === "TRANSFERRED_SUPPLY_TO") {
-          findings.push(
-            createFinding({
-              code: "SUPPLY_TRANSFERRED_TO_WALLET",
-              detector: this.metadata,
-              title: "Deployer transferred a significant share of supply to another wallet",
-              severity: "MEDIUM",
-              category: "DISTRIBUTION_RISK",
-              confidence: edge.confidence,
-              description: `${edge.evidence} (${edge.address})`,
-              technicalExplanation: `Edge type ${edge.type}, source: ${edge.source}.`,
-              evidence: [edgeEvidence],
-              recommendation:
-                "Review whether this recipient is a known team/vesting/exchange wallet or an unexplained large holder."
-            })
-          );
-        } else if (edge.type === "FUNDED_BY") {
+        if (edge.type === "FUNDED_BY") {
           findings.push(
             createFinding({
               code: "DEPLOYER_FUNDED_BY_WALLET",

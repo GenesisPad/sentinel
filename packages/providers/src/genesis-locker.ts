@@ -46,6 +46,7 @@ interface GenesisLockStruct {
 export function createGenesisLockerProvider(config: GenesisLockerConfig): LockerProvider {
   return {
     id: "genesis-locker",
+    lockerAddress: config.lockerAddress,
     supportsChain: (chainId) => chainId === config.chainId,
 
     async getLockStatus({ adapter, chainId, lpTokenAddress }): Promise<LockStatusResult> {
