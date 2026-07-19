@@ -367,31 +367,46 @@ model SimulationRun {
   @@index([scanId])
 }
 
+enum ApiUsageKind {
+  CACHED_LOOKUP
+  FRESH_SCAN
+  DEEP_SIMULATION
+  PROVIDER_HEAVY
+  FAILED_REQUEST
+  RATE_LIMIT_EVENT
+}
+
 model APIKey {
-  id         String    @id @default(cuid())
-  name       String
-  keyHash    String    @unique
-  prefix     String
-  enabled    Boolean   @default(true)
-  createdAt  DateTime  @default(now())
-  lastUsedAt DateTime?
-  revokedAt  DateTime?
+  id                 String    @id @default(cuid())
+  name               String
+  keyHash            String    @unique
+  prefix             String
+  /// Scope strings this key is authorized for (e.g. "scan:read", "scan:write"). Checked by
+  /// route middleware; never enforced by database constraints beyond storage.
+  scopes             String[]  @default(["scan:read"])
+  rateLimitPerMinute Int       @default(60)
+  enabled            Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  lastUsedAt         DateTime?
+  revokedAt          DateTime?
 
   usage APIUsage[]
 }
 
 model APIUsage {
-  id        String   @id @default(cuid())
+  id        String       @id @default(cuid())
   apiKeyId  String?
   route     String
   method    String
   status    Int
-  units     Int      @default(1)
-  createdAt DateTime @default(now())
+  kind      ApiUsageKind @default(CACHED_LOOKUP)
+  units     Int          @default(1)
+  createdAt DateTime     @default(now())
 
   apiKey APIKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
 
   @@index([apiKeyId, createdAt])
+  @@index([kind, createdAt])
 }
 
 model Watchlist {

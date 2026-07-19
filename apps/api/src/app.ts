@@ -7,9 +7,11 @@ import { z } from "zod";
 import type { AppEnv } from "@genesis-sentinel/config";
 import {
   checkPostgres,
+  createApiKeyRepository,
   createPrismaClient,
   createScanRepository,
   createTelegramTrackingRepository,
+  type ApiKeyRepository,
   type ScanRepository
 } from "@genesis-sentinel/database";
 import type { Logger } from "pino";
@@ -18,8 +20,15 @@ import {
   createHealth,
   normalizeEvmAddress,
   scannerVersion,
+  type ApiKeyView,
+  type ApiUsageKind,
+  type ScanEvent,
+  type ScanEventType,
+  type ScanState,
   type ServiceReadiness
 } from "@genesis-sentinel/shared";
+import { extractApiKey, generateApiKey, hashApiKey } from "./auth.js";
+import { createRateLimiter } from "./rate-limiter.js";
 import { submitScanRequest } from "./scan-service.js";
 import {
   createTelegramBot,
@@ -28,6 +37,14 @@ import {
   type TelegramTrackAddress,
   type TelegramUntrackAddress
 } from "./telegram.js";
+
+declare module "fastify" {
+  interface FastifyRequest {
+    /** Populated by the API-key auth hook when a valid, non-revoked key is presented.
+     * Undefined when no key was presented at all (anonymous request is still allowed). */
+    apiKey?: ApiKeyView;
+  }
+}
 
 const evmAddressSchema = z.custom<`0x${string}`>(
   (value) => typeof value === "string" && /^0x[a-fA-F0-9]{40}$/.test(value),
@@ -48,18 +65,32 @@ const recentScansQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20)
 });
 
+const createApiKeySchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  scopes: z.array(z.enum(["scan:read", "scan:write"])).nonempty().optional()
+});
+
+/** Anonymous (no API key) requests to POST /v1/scans get a stricter shared limit than a
+ * freshly-created key's default `rateLimitPerMinute` (60) — API-key creation is itself free and
+ * unauthenticated, so this is the only real backstop against anonymous scan-spam. */
+const ANONYMOUS_SCAN_RATE_LIMIT_PER_MINUTE = 10;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
 export interface AppOptions {
   env: AppEnv;
   logger: Logger;
   scanRepository?: ScanRepository;
   scanQueue?: ScanQueue;
+  apiKeyRepository?: ApiKeyRepository;
 }
 
-export async function buildApp({ env, logger, scanRepository, scanQueue }: AppOptions) {
+export async function buildApp({ env, logger, scanRepository, scanQueue, apiKeyRepository }: AppOptions) {
   const prisma = scanRepository ? undefined : createPrismaClient(env.DATABASE_URL);
   const scans = scanRepository ?? createScanRepository(prisma!);
   const telegramTracking = prisma ? createTelegramTrackingRepository(prisma) : null;
+  const apiKeys = apiKeyRepository ?? (prisma ? createApiKeyRepository(prisma) : null);
   const queue = scanQueue ?? createScanQueue(env.REDIS_URL);
+  const scanRateLimiter = createRateLimiter(RATE_LIMIT_WINDOW_MS);
   const app = Fastify({
     loggerInstance: logger,
     bodyLimit: 16 * 1024,
@@ -97,6 +128,60 @@ export async function buildApp({ env, logger, scanRepository, scanQueue }: AppOp
 
   await app.register(swaggerUi, {
     routePrefix: "/docs"
+  });
+
+  // API-key auth is optional (anonymous requests are allowed, per the anonymous-scan-limit
+  // requirement) but a *presented* key must be valid — an unknown, disabled, or revoked key is
+  // rejected outright rather than silently treated as anonymous.
+  app.addHook("onRequest", async (request, reply) => {
+    reply.header("x-request-id", request.id);
+
+    if (!apiKeys) return;
+    const presentedKey = extractApiKey(request.headers);
+    if (!presentedKey) return;
+
+    const record = await apiKeys.getApiKeyByHash(hashApiKey(presentedKey));
+    if (!record || !record.enabled || record.revokedAt) {
+      return reply.code(401).send({
+        error: "invalid_api_key",
+        message: "The provided API key is unknown, disabled, or revoked."
+      });
+    }
+
+    request.apiKey = record;
+    await apiKeys.touchApiKeyLastUsed(record.id).catch(() => undefined);
+  });
+
+  // Usage accounting (Milestone 8): every request is classified into the spec's usage
+  // categories and persisted, independent of whether it succeeded. Best-effort — a logging
+  // failure never affects the response already sent.
+  app.addHook("onResponse", async (request, reply) => {
+    if (!apiKeys) return;
+
+    const route = request.routeOptions?.url ?? request.url;
+    const status = reply.statusCode;
+    const kind: ApiUsageKind =
+      status === 429
+        ? "RATE_LIMIT_EVENT"
+        : status >= 400
+          ? "FAILED_REQUEST"
+          : route === "/v1/scans" && request.method === "POST"
+            ? status === 202
+              ? "FRESH_SCAN"
+              : "CACHED_LOOKUP"
+            : route.endsWith("/simulations")
+              ? "DEEP_SIMULATION"
+              : "CACHED_LOOKUP";
+
+    await apiKeys
+      .recordApiUsage({
+        apiKeyId: request.apiKey?.id ?? null,
+        route,
+        method: request.method,
+        status,
+        kind
+      })
+      .catch(() => undefined);
   });
 
   const submitScan = async (input: {
@@ -162,6 +247,32 @@ export async function buildApp({ env, logger, scanRepository, scanQueue }: AppOp
   });
 
   app.post("/v1/scans", async (request, reply) => {
+    // Scope check: only applies to authenticated requests. Anonymous requests may still create
+    // scans (subject to the stricter anonymous rate limit below) — a presented key just has to
+    // actually be authorized for scan:write, not merely valid.
+    if (request.apiKey && !request.apiKey.scopes.includes("scan:write")) {
+      return reply.code(403).send({
+        error: "insufficient_scope",
+        message: "This API key does not have the scan:write scope required to create scans."
+      });
+    }
+
+    const rateLimitKey = request.apiKey?.id ?? `anon:${request.ip}`;
+    const rateLimitMax = request.apiKey?.rateLimitPerMinute ?? ANONYMOUS_SCAN_RATE_LIMIT_PER_MINUTE;
+    const rateLimitResult = scanRateLimiter.check(rateLimitKey, rateLimitMax);
+    if (!rateLimitResult.allowed) {
+      return reply
+        .code(429)
+        .header("retry-after", rateLimitResult.retryAfterSeconds ?? 60)
+        .send({
+          error: "rate_limited",
+          message: request.apiKey
+            ? "This API key has exceeded its configured scan rate limit."
+            : "Anonymous scan requests are rate-limited. Create an API key for a higher limit.",
+          retryAfterSeconds: rateLimitResult.retryAfterSeconds
+        });
+    }
+
     const parsed = createScanSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({
@@ -218,6 +329,79 @@ export async function buildApp({ env, logger, scanRepository, scanQueue }: AppOp
     return scan;
   });
 
+  // Server-Sent Events for scan progress, with polling (GET /v1/scans/:scanId) as a full
+  // fallback for clients that can't hold a streaming connection. Event types are derived from
+  // the scan's overall ScanState transitions — the only granularity actually persisted; a true
+  // per-check "inconclusive" event would need finer-grained state than a scan's top-level
+  // ScanState carries, so `scan.stage.inconclusive` is defined but never emitted here.
+  app.get("/v1/scans/:scanId/events", async (request, reply) => {
+    const scanId = (request.params as { scanId?: string }).scanId;
+    const initial = scanId ? await scans.getScan(scanId) : undefined;
+    if (!scanId || !initial) {
+      return reply.code(404).send({
+        error: "scan_not_found",
+        message: "No scan exists for that foundation scan ID."
+      });
+    }
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive"
+    });
+
+    const send = (type: ScanEventType, data: Record<string, unknown>) => {
+      const event: ScanEvent = { type, scanId, data, emittedAt: new Date().toISOString() };
+      reply.raw.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+    };
+
+    const terminalStates = new Set<ScanState>(["COMPLETED", "PARTIALLY_COMPLETED", "FAILED"]);
+    let lastState: ScanState | null = null;
+
+    const emitTransition = (state: ScanState) => {
+      if (lastState === null) {
+        send(state === "QUEUED" ? "scan.queued" : "scan.stage.started", { state });
+      } else {
+        if (lastState === "QUEUED") send("scan.started", { state });
+        send("scan.stage.completed", { state: lastState });
+        if (!terminalStates.has(state)) send("scan.stage.started", { state });
+      }
+
+      if (state === "COMPLETED") send("scan.completed", { state });
+      else if (state === "PARTIALLY_COMPLETED") send("scan.partial", { state });
+      else if (state === "FAILED") send("scan.failed", { state });
+
+      lastState = state;
+    };
+
+    let closed = false;
+    request.raw.on("close", () => {
+      closed = true;
+      clearInterval(interval);
+    });
+
+    emitTransition(initial.state);
+    const poll = async () => {
+      if (closed) return;
+      const scan = await scans.getScan(scanId).catch(() => null);
+      if (!scan) return;
+      if (scan.state !== lastState) emitTransition(scan.state);
+      if (terminalStates.has(scan.state)) {
+        clearInterval(interval);
+        reply.raw.end();
+      }
+    };
+    const interval = setInterval(() => {
+      void poll();
+    }, 1_500);
+
+    if (terminalStates.has(initial.state)) {
+      clearInterval(interval);
+      reply.raw.end();
+    }
+  });
+
   app.get("/v1/tokens/:chainId/:address", async (request, reply) => {
     const parsed = tokenParamsSchema.safeParse(request.params);
     if (!parsed.success) {
@@ -238,6 +422,102 @@ export async function buildApp({ env, logger, scanRepository, scanQueue }: AppOp
     return result;
   });
 
+  app.get("/v1/tokens/:chainId/:address/liquidity", async (request, reply) => {
+    const parsed = tokenParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid_token_request",
+        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+      });
+    }
+
+    const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+    if (!result) {
+      return reply.code(404).send({
+        error: "scan_not_found",
+        message: "No scan has been run for this token yet."
+      });
+    }
+
+    return result.liquidity;
+  });
+
+  app.get("/v1/tokens/:chainId/:address/holders", async (request, reply) => {
+    const parsed = tokenParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid_token_request",
+        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+      });
+    }
+
+    const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+    if (!result) {
+      return reply.code(404).send({
+        error: "scan_not_found",
+        message: "No scan has been run for this token yet."
+      });
+    }
+
+    return result.holders;
+  });
+
+  app.get("/v1/tokens/:chainId/:address/deployer", async (request, reply) => {
+    const parsed = tokenParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid_token_request",
+        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+      });
+    }
+
+    const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+    if (!result) {
+      return reply.code(404).send({
+        error: "scan_not_found",
+        message: "No scan has been run for this token yet."
+      });
+    }
+
+    if (!result.token.deployerAddress) {
+      return reply.code(404).send({
+        error: "deployer_not_found",
+        message: "No deployer address has been resolved for this token yet."
+      });
+    }
+
+    const history = await scans
+      .getDeployerHistory(parsed.data.chainId, result.token.deployerAddress, parsed.data.address)
+      .catch(() => null);
+
+    return {
+      chainId: parsed.data.chainId,
+      address: normalizeEvmAddress(parsed.data.address),
+      deployerAddress: result.token.deployerAddress,
+      history
+    };
+  });
+
+  app.get("/v1/tokens/:chainId/:address/simulations", async (request, reply) => {
+    const parsed = tokenParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid_token_request",
+        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+      });
+    }
+
+    const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+    if (!result) {
+      return reply.code(404).send({
+        error: "scan_not_found",
+        message: "No scan has been run for this token yet."
+      });
+    }
+
+    return { simulations: result.simulations };
+  });
+
   app.get("/v1/tokens/:chainId/:address/findings", async (request, reply) => {
     const parsed = tokenParamsSchema.safeParse(request.params);
     if (!parsed.success) {
@@ -254,8 +534,84 @@ export async function buildApp({ env, logger, scanRepository, scanQueue }: AppOp
     };
   });
 
-  app.get("/v1/risk/:chainId/:address", async (request, reply) => {
-    const parsed = tokenParamsSchema.safeParse(request.params);
+  app.get(
+    "/v1/risk/:chainId/:address",
+    {
+      schema: {
+        description:
+          "The persisted, canonical risk assessment for a token's latest scan. Never recomputed on the fly.",
+        tags: ["risk"],
+        response: {
+          200: {
+            description: "A risk snapshot. `status`/`score` vary by scan outcome.",
+            type: "object",
+            additionalProperties: true,
+            examples: [
+              {
+                summary: "Completed, high-risk scan",
+                value: {
+                  chainId: 4663,
+                  address: "0x0000000000000000000000000000000000000001",
+                  status: "AVAILABLE",
+                  level: "HIGH",
+                  score: 68,
+                  confidence: "HIGH",
+                  message: "Persisted risk assessment is available for this scan."
+                }
+              },
+              {
+                summary: "Completed, low-risk scan",
+                value: {
+                  chainId: 4663,
+                  address: "0x0000000000000000000000000000000000000002",
+                  status: "AVAILABLE",
+                  level: "LOW",
+                  score: 8,
+                  confidence: "HIGH",
+                  message: "Persisted risk assessment is available for this scan."
+                }
+              },
+              {
+                summary: "Partial scan (some stages incomplete)",
+                value: {
+                  chainId: 4663,
+                  address: "0x0000000000000000000000000000000000000003",
+                  status: "AVAILABLE",
+                  level: "ELEVATED",
+                  score: 42,
+                  confidence: "MEDIUM",
+                  message: "Persisted risk assessment is available for this scan."
+                }
+              },
+              {
+                summary: "Unable to assess (no scoreable findings yet)",
+                value: {
+                  chainId: 4663,
+                  address: "0x0000000000000000000000000000000000000004",
+                  status: "UNABLE_TO_ASSESS",
+                  level: "UNABLE_TO_ASSESS",
+                  score: null,
+                  confidence: "LOW",
+                  message: "No detector findings were produced for this scan."
+                }
+              }
+            ]
+          },
+          400: {
+            description: "Invalid chain ID or address.",
+            type: "object",
+            additionalProperties: true
+          },
+          404: {
+            description: "No scan exists for this token yet.",
+            type: "object",
+            additionalProperties: true
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const parsed = tokenParamsSchema.safeParse(request.params);
     if (!parsed.success) {
       return reply.code(400).send({
         error: "invalid_risk_request",
@@ -271,7 +627,81 @@ export async function buildApp({ env, logger, scanRepository, scanQueue }: AppOp
       });
     }
 
-    return risk;
+      return risk;
+    }
+  );
+
+  // API-key self-service: creation is unauthenticated (anyone can request a key, same as most
+  // public developer APIs) but shares the anonymous rate limiter to bound abuse. The plaintext
+  // key is returned exactly once, in this response, and is never recoverable afterward — only
+  // its hash is stored.
+  app.post("/v1/api-keys", async (request, reply) => {
+    if (!apiKeys) {
+      return reply.code(503).send({
+        error: "api_keys_not_configured",
+        message: "API key management is not available on this instance."
+      });
+    }
+
+    const rateLimitResult = scanRateLimiter.check(`anon:${request.ip}`, ANONYMOUS_SCAN_RATE_LIMIT_PER_MINUTE);
+    if (!rateLimitResult.allowed) {
+      return reply.code(429).send({
+        error: "rate_limited",
+        message: "Too many API key creation requests from this address.",
+        retryAfterSeconds: rateLimitResult.retryAfterSeconds
+      });
+    }
+
+    const parsed = createApiKeySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid_api_key_request",
+        message: "Provide a name (1-100 characters) and optionally a list of scopes."
+      });
+    }
+
+    const generated = generateApiKey();
+    const created = await apiKeys.createApiKey({
+      name: parsed.data.name,
+      keyHash: generated.hash,
+      prefix: generated.prefix,
+      scopes: parsed.data.scopes ?? ["scan:read"],
+      rateLimitPerMinute: 60
+    });
+    await apiKeys
+      .recordAuditEvent({
+        type: "api_key.created",
+        subject: created.id,
+        metadata: { name: created.name, prefix: created.prefix, scopes: created.scopes }
+      })
+      .catch(() => undefined);
+
+    return reply.code(201).send({ ...created, key: generated.plaintext });
+  });
+
+  // Self-revocation only — a key revokes itself, since there is no separate account/ownership
+  // model yet to authorize revoking a *different* key.
+  app.delete("/v1/api-keys/me", async (request, reply) => {
+    if (!apiKeys) {
+      return reply.code(503).send({
+        error: "api_keys_not_configured",
+        message: "API key management is not available on this instance."
+      });
+    }
+
+    if (!request.apiKey) {
+      return reply.code(401).send({
+        error: "missing_api_key",
+        message: "Provide the API key to revoke via Authorization: Bearer <key> or X-API-Key."
+      });
+    }
+
+    const revoked = await apiKeys.revokeApiKey(request.apiKey.id);
+    await apiKeys
+      .recordAuditEvent({ type: "api_key.revoked", subject: request.apiKey.id })
+      .catch(() => undefined);
+
+    return revoked;
   });
 
   app.post("/telegram/webhook", async (request, reply) => {

@@ -393,6 +393,52 @@ export function normalizeEvmAddress(address: `0x${string}`): `0x${string}` {
   return address.toLowerCase() as `0x${string}`;
 }
 
+export type ApiUsageKind =
+  | "CACHED_LOOKUP"
+  | "FRESH_SCAN"
+  | "DEEP_SIMULATION"
+  | "PROVIDER_HEAVY"
+  | "FAILED_REQUEST"
+  | "RATE_LIMIT_EVENT";
+
+/** Safe API key view — never includes the hash or the plaintext secret. */
+export interface ApiKeyView {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  rateLimitPerMinute: number;
+  enabled: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+/** Returned exactly once, at creation time. The plaintext key is never persisted or
+ * retrievable again — only its hash is stored. */
+export interface ApiKeyCreatedView extends ApiKeyView {
+  key: string;
+}
+
+/** SSE event types for scan progress (GET /v1/scans/:scanId/events), matching the spec's
+ * required event list. Polling (GET /v1/scans/:scanId) remains a full fallback. */
+export type ScanEventType =
+  | "scan.queued"
+  | "scan.started"
+  | "scan.stage.started"
+  | "scan.stage.completed"
+  | "scan.stage.inconclusive"
+  | "scan.partial"
+  | "scan.completed"
+  | "scan.failed";
+
+export interface ScanEvent {
+  type: ScanEventType;
+  scanId: string;
+  data: Record<string, unknown>;
+  emittedAt: string;
+}
+
 export function assertRiskScore(score: number): number {
   if (
     !Number.isInteger(score) ||

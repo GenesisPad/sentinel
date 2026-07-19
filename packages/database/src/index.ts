@@ -10,6 +10,8 @@ import type {
 import {
   normalizeEvmAddress,
   scannerVersion,
+  type ApiKeyView,
+  type ApiUsageKind,
   type BytecodeReuseView,
   type CheckOutcome,
   type DeployerHistoryView,
@@ -1113,6 +1115,130 @@ export function createTelegramTrackingRepository(db: PrismaDatabase): TelegramTr
       });
 
       return items.map(toTrackedTelegramAddress);
+    }
+  };
+}
+
+export interface CreateApiKeyRecordInput {
+  name: string;
+  keyHash: string;
+  prefix: string;
+  scopes: string[];
+  rateLimitPerMinute: number;
+}
+
+export interface RecordApiUsageInput {
+  apiKeyId: string | null;
+  route: string;
+  method: string;
+  status: number;
+  kind: ApiUsageKind;
+  units?: number;
+}
+
+export interface ApiKeyRepository {
+  createApiKey(input: CreateApiKeyRecordInput): Promise<ApiKeyView>;
+  getApiKeyByHash(keyHash: string): Promise<ApiKeyView | null>;
+  touchApiKeyLastUsed(id: string): Promise<void>;
+  revokeApiKey(id: string): Promise<ApiKeyView | null>;
+  recordApiUsage(input: RecordApiUsageInput): Promise<void>;
+  /** Lightweight audit trail for API-key lifecycle events (creation/revocation), reusing the
+   * existing generic SecurityEvent table rather than a dedicated audit-log model. */
+  recordAuditEvent(input: {
+    type: string;
+    subject?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void>;
+}
+
+function toApiKeyView(record: {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  rateLimitPerMinute: number;
+  enabled: boolean;
+  createdAt: Date;
+  lastUsedAt: Date | null;
+  revokedAt: Date | null;
+}): ApiKeyView {
+  return {
+    id: record.id,
+    name: record.name,
+    prefix: record.prefix,
+    scopes: record.scopes,
+    rateLimitPerMinute: record.rateLimitPerMinute,
+    enabled: record.enabled,
+    createdAt: record.createdAt.toISOString(),
+    lastUsedAt: record.lastUsedAt?.toISOString() ?? null,
+    revokedAt: record.revokedAt?.toISOString() ?? null
+  };
+}
+
+export function createApiKeyRepository(db: PrismaDatabase): ApiKeyRepository {
+  return {
+    async createApiKey(input) {
+      const record = await db.aPIKey.create({
+        data: {
+          name: input.name,
+          keyHash: input.keyHash,
+          prefix: input.prefix,
+          scopes: input.scopes,
+          rateLimitPerMinute: input.rateLimitPerMinute
+        }
+      });
+
+      return toApiKeyView(record);
+    },
+
+    async getApiKeyByHash(keyHash) {
+      const record = await db.aPIKey.findUnique({ where: { keyHash } });
+      return record ? toApiKeyView(record) : null;
+    },
+
+    async touchApiKeyLastUsed(id) {
+      await db.aPIKey.update({
+        where: { id },
+        data: { lastUsedAt: new Date() }
+      });
+    },
+
+    async revokeApiKey(id) {
+      const existing = await db.aPIKey.findUnique({ where: { id } });
+      if (!existing || existing.revokedAt) {
+        return existing ? toApiKeyView(existing) : null;
+      }
+
+      const record = await db.aPIKey.update({
+        where: { id },
+        data: { revokedAt: new Date(), enabled: false }
+      });
+
+      return toApiKeyView(record);
+    },
+
+    async recordApiUsage(input) {
+      await db.aPIUsage.create({
+        data: {
+          apiKeyId: input.apiKeyId,
+          route: input.route,
+          method: input.method,
+          status: input.status,
+          kind: input.kind,
+          units: input.units ?? 1
+        }
+      });
+    },
+
+    async recordAuditEvent(input) {
+      await db.securityEvent.create({
+        data: {
+          type: input.type,
+          severity: "info",
+          subject: input.subject ?? null,
+          ...(input.metadata ? { metadata: toJsonValue(input.metadata) } : {})
+        }
+      });
     }
   };
 }
