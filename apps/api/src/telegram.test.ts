@@ -273,6 +273,59 @@ describe("telegram scan helpers", () => {
     expect(reply).not.toContain("Launch MC");
   });
 
+  it("shortens addresses with plain ASCII, never a character that can break Telegram's Markdown parser", () => {
+    // Reproduces a real production outage: shortenAddress used a mis-encoded "…" that produced
+    // a garbled multi-byte sequence inside a Markdown code span. Telegram's parser choked on it
+    // ("can't parse entities: Can't find end of the entity..."), so every single reply — /scan,
+    // pasted addresses, /result, refresh — failed with a 500 and the bot went completely silent.
+    // Any report containing a deployer/owner address reproduces this, so a full report (not just
+    // the shortening helper in isolation) is asserted here.
+    const result: ScanResultView = {
+      scan: {
+        scanId: "scan-4",
+        chainId: 4663,
+        address: "0x0000000000000000000000000000000000000004",
+        state: "COMPLETED",
+        scannerVersion: "0.1.0-foundation",
+        submittedAt: "2026-07-19T00:00:00.000Z",
+        message: "Scan state is COMPLETED."
+      },
+      token: {
+        chainId: 4663,
+        address: "0x0000000000000000000000000000000000000004",
+        deployerAddress: "0x8cfa84924011b19765136baea669ac81fe8bb561"
+      },
+      detectorChecks: [],
+      findings: [],
+      liquidity: { status: "UNSUPPORTED", pools: [], message: "Liquidity discovery is not configured yet." },
+      holders: { status: "UNSUPPORTED", snapshots: [], message: "Holder analysis is not configured yet." },
+      simulations: [],
+      risk: {
+        chainId: 4663,
+        address: "0x0000000000000000000000000000000000000004",
+        scannerVersion: "0.1.0-foundation",
+        status: "UNABLE_TO_ASSESS",
+        level: "UNABLE_TO_ASSESS",
+        score: null,
+        confidence: "LOW",
+        categoryScores: [],
+        findingContributions: [],
+        unableToAssessReasons: [],
+        findingCounts: { INFO: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 },
+        message: "No detector findings were produced for this scan."
+      }
+    };
+
+    const reply = formatTelegramResultReply(result);
+
+    expect(reply).toContain("Deployer: `0x8cfa...b561`");
+    // The bug was specific to the shortened-address code span, not the whole message (which
+    // legitimately contains emoji elsewhere for risk indicators) — assert that span is 7-bit
+    // ASCII rather than the whole reply.
+    const deployerLine = reply.split("\n").find((line) => line.startsWith("Deployer:"));
+    expect(deployerLine && /^[\x00-\x7F]*$/.test(deployerLine)).toBe(true);
+  });
+
   it("flags negligible liquidity and paid-dex status, using the highest-liquidity pool not pools[0]", () => {
     // Reproduces two real bugs found in the web app and ported here for Telegram, which
     // formats its own report text independently: picking pools[0] instead of the pool with the

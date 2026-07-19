@@ -935,7 +935,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function shortenAddress(address: string): string {
-  return address.length > 12 ? `${address.slice(0, 6)}â€¦${address.slice(-4)}` : address;
+  // Plain ASCII, not a unicode ellipsis: a mis-encoded "…" here previously produced a garbled
+  // multi-byte sequence inside a Markdown code span, which broke Telegram's message parser on
+  // every single report ("can't parse entities: Can't find end of the entity..."), causing every
+  // reply — /scan, pasted addresses, /result, refresh — to fail with a 500 and the bot going
+  // completely silent. Verified live against production logs.
+  return address.length > 12 ? `${address.slice(0, 6)}...${address.slice(-4)}` : address;
 }
 
 function formatTelegramUsd(value: string | undefined): string | null {
