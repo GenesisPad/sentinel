@@ -120,10 +120,17 @@ function boolAnswer(question: string, value: boolean | null): Answer | null {
 }
 
 function honeypotAnswer(isHoneypot: boolean | null): Answer | null {
-  if (isHoneypot == null) return null;
+  if (isHoneypot == null) {
+    return {
+      question: "Honeypot",
+      value: "Unknown",
+      tone: "info",
+      detail: "No sell-simulation verdict was returned.",
+    };
+  }
   return isHoneypot
-    ? { question: "Honeypot?", value: "Detected", tone: "bad" }
-    : { question: "Honeypot?", value: "Not detected", tone: "good" };
+    ? { question: "Honeypot", value: "Yes", tone: "bad" }
+    : { question: "Honeypot", value: "No", tone: "good" };
 }
 
 function lpLockedAnswer(

@@ -240,6 +240,7 @@ describe("scan worker orchestration", () => {
       "detector:pause-selector-patterns:0",
       "detector:blacklist-selector-patterns:0",
       "detector:max-transaction-selector-patterns:0",
+      "detector:cooldown-selector-patterns:0",
       "detector:trading-control-selector-patterns:0",
       "detector:fee-exclusion-selector-patterns:0",
       "detector:source-code-risk-patterns:0",

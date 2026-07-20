@@ -169,7 +169,7 @@ function TraderSections({ report }: { report: ScanReport }) {
       </Section>
 
       <Section id="wallet-cluster" title="Connected wallets" subtitle="Real, evidenced wallet relationships — never inferred from timing coincidence.">
-        <WalletClusterGraph chainId={report.token.chainId} tokenSymbol={report.token.symbol} tokenAddress={report.token.address} edges={report.walletCluster} />
+        <WalletClusterGraph chainId={report.token.chainId} tokenSymbol={report.token.symbol} tokenAddress={report.token.address} edges={report.walletCluster} devCluster={report.devCluster} />
       </Section>
 
       <Section id="metadata" title="Scan metadata">
@@ -212,7 +212,7 @@ function TechnicalSections({ report }: { report: ScanReport }) {
       </Section>
 
       <Section id="wallet-cluster" title="Connected wallets" subtitle="Real, evidenced wallet relationships — never inferred from timing coincidence.">
-        <WalletClusterGraph chainId={report.token.chainId} tokenSymbol={report.token.symbol} tokenAddress={report.token.address} edges={report.walletCluster} />
+        <WalletClusterGraph chainId={report.token.chainId} tokenSymbol={report.token.symbol} tokenAddress={report.token.address} edges={report.walletCluster} devCluster={report.devCluster} />
       </Section>
 
       <Section id="metadata" title="Scan metadata">

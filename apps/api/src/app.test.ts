@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import { loadEnv } from "@genesis-sentinel/config";
 import type { ApiKeyRepository, ScanRepository } from "@genesis-sentinel/database";
 import { createLogger } from "@genesis-sentinel/observability";
-import type { ApiKeyView, ApiUsageKind, RiskSnapshot, ScanProgress, ScanResultView } from "@genesis-sentinel/shared";
+import type {
+  ApiKeyView,
+  ApiUsageKind,
+  RiskSnapshot,
+  ScanProgress,
+  ScanResultView,
+  TokenSecuritySummaryView
+} from "@genesis-sentinel/shared";
 import { buildApp } from "./app.js";
 
 function createInMemoryApiKeyRepository() {
@@ -402,6 +409,47 @@ describe("api foundation", () => {
     expect(response.body).not.toContain("keyHash");
   });
 
+  it("requires the admin secret for custom API-key scopes or limits", async () => {
+    const { repository } = createInMemoryApiKeyRepository();
+    const app = await buildApp({
+      env: loadEnv({ NODE_ENV: "test", LOG_LEVEL: "silent", API_ADMIN_SECRET: "admin-secret-for-tests" }),
+      logger: createLogger({ NODE_ENV: "test", LOG_LEVEL: "silent" }, "api-test"),
+      scanRepository,
+      scanQueue,
+      apiKeyRepository: repository
+    });
+
+    const publicWrite = await app.inject({
+      method: "POST",
+      url: "/v1/api-keys",
+      payload: { name: "public write attempt", scopes: ["scan:read", "scan:write"] }
+    });
+    const publicCustomLimit = await app.inject({
+      method: "POST",
+      url: "/v1/api-keys",
+      payload: { name: "public custom limit attempt", rateLimitPerMinute: 5_000 }
+    });
+    const adminCreated = await app.inject({
+      method: "POST",
+      url: "/v1/api-keys",
+      headers: { "x-admin-secret": "admin-secret-for-tests" },
+      payload: {
+        name: "dexscreener-production-read",
+        scopes: ["scan:read"],
+        rateLimitPerMinute: 5_000
+      }
+    });
+    await app.close();
+
+    expect(publicWrite.statusCode).toBe(403);
+    expect(publicCustomLimit.statusCode).toBe(403);
+    expect(adminCreated.statusCode, adminCreated.body).toBe(201);
+    expect(adminCreated.json<{ scopes: string[]; rateLimitPerMinute: number }>()).toMatchObject({
+      scopes: ["scan:read"],
+      rateLimitPerMinute: 5_000
+    });
+  });
+
   it("returns the presented key's own record via GET /v1/api-keys/me, and 401s with no key", async () => {
     const { repository } = createInMemoryApiKeyRepository();
     const app = await buildApp({
@@ -509,7 +557,7 @@ describe("api foundation", () => {
     expect(responses.some((r) => r.statusCode === 429)).toBe(true);
   });
 
-  it("exposes token liquidity, holders, deployer, and simulations sub-resources", async () => {
+  it("exposes public token liquidity, security summary, holders, deployer, and simulations sub-resources without requiring an API key", async () => {
     const app = await buildApp({
       env: loadEnv({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
       logger: createLogger({ NODE_ENV: "test", LOG_LEVEL: "silent" }, "api-test"),
@@ -517,9 +565,17 @@ describe("api foundation", () => {
       scanQueue
     });
 
-    const address = "0x0000000000000000000000000000000000000003";
-    const [liquidity, holders, deployer, simulations] = await Promise.all([
+    const address = "0x0000000000000000000000000000000000000009";
+    await app.inject({
+      method: "POST",
+      url: "/v1/scans",
+      headers: { "idempotency-key": "sub-resource-key" },
+      payload: { chainId: 4663, address }
+    });
+
+    const [liquidity, securitySummary, holders, deployer, simulations] = await Promise.all([
       app.inject({ method: "GET", url: `/v1/tokens/4663/${address}/liquidity` }),
+      app.inject({ method: "GET", url: `/v1/tokens/4663/${address}/security-summary` }),
       app.inject({ method: "GET", url: `/v1/tokens/4663/${address}/holders` }),
       app.inject({ method: "GET", url: `/v1/tokens/4663/${address}/deployer` }),
       app.inject({ method: "GET", url: `/v1/tokens/4663/${address}/simulations` })
@@ -527,6 +583,21 @@ describe("api foundation", () => {
     await app.close();
 
     expect(liquidity.statusCode).toBe(200);
+    expect(securitySummary.statusCode, securitySummary.body).toBe(200);
+    expect(securitySummary.json<TokenSecuritySummaryView>()).toMatchObject({
+      product: "Genesis Sentinel",
+      fullAnalysisUrl: `https://sentinel.genesispad.app/token/4663/${address}`,
+      devCluster: {
+        walletCount: 0,
+        knownHoldingPct: null,
+        unknownHoldingWalletCount: 0,
+        wallets: []
+      },
+      signals: expect.arrayContaining([
+        expect.objectContaining({ id: "honeypot", label: "Honeypot", answer: "UNKNOWN" })
+      ])
+    });
+    expect(securitySummary.body).not.toContain(["Quick", "Intel"].join(" "));
     expect(holders.statusCode).toBe(200);
     expect(simulations.statusCode).toBe(200);
     expect(simulations.json()).toHaveProperty("simulations");

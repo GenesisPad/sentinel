@@ -301,6 +301,21 @@ describe("new selector-pattern detectors", () => {
     expect(result.findings[0]).toMatchObject({ code: "TRADING_CONTROL_SURFACE", severity: "HIGH" });
   });
 
+  it("detects cooldown selector surface", async () => {
+    const detector = selectorPatternDetectors.find(
+      (d) => d.metadata.id === "cooldown-selector-patterns"
+    );
+    const result = await detector!.run(
+      { bytecode: `0x${toFunctionSelector("setCooldown(uint256)").slice(2)}6000` },
+      context
+    );
+
+    expect(result.findings[0]).toMatchObject({
+      code: "COOLDOWN_CAPABILITY_SURFACE",
+      category: "TRADING_SAFETY"
+    });
+  });
+
   it("detects fee-exclusion (whitelist) selector surface", async () => {
     const detector = selectorPatternDetectors.find(
       (d) => d.metadata.id === "fee-exclusion-selector-patterns"
@@ -332,7 +347,7 @@ describe("source-code risk detector", () => {
     });
   });
 
-  it("detects blacklist, trading gates, tax controls, and minting in verified source", async () => {
+  it("detects blacklist, cooldowns, trading gates, tax controls, obfuscated addresses, and minting in verified source", async () => {
     const result = await sourceCodeRiskDetector.run(
       {
         status: "VERIFIED",
@@ -350,8 +365,12 @@ describe("source-code risk detector", () => {
                 uint256 public buyTax;
                 function enableTrading() external onlyOwner { tradingEnabled = true; }
                 function setBlacklist(address account, bool value) external onlyOwner { isBlacklisted[account] = value; }
+                function setCooldown(uint256 value) external onlyOwner { cooldown = value; }
                 function setBuyFee(uint256 value) external onlyOwner { buyTax = value; }
                 function mint(address to, uint256 amount) external onlyOwner { _mint(to, amount); }
+                function hiddenWallet() external pure returns (address) {
+                  return address(uint160(0x1111111111111111111111111111111111111111));
+                }
               }
             `
           }
@@ -363,12 +382,42 @@ describe("source-code risk detector", () => {
     expect(result.findings.map((finding) => finding.code)).toEqual(
       expect.arrayContaining([
         "SOURCE_BLACKLIST_CONTROL",
+        "SOURCE_TRADING_COOLDOWN_CONTROL",
         "SOURCE_TRADING_TOGGLE",
         "SOURCE_TAX_OR_LIMIT_CONTROL",
+        "SOURCE_OBFUSCATED_ADDRESS",
         "SOURCE_MINT_OR_SUPPLY_CONTROL"
       ])
     );
     expect(result.findings[0]?.evidence[0]).toMatchObject({ type: "EXTERNAL_SOURCE" });
+  });
+
+  it("does not treat a plain router constant as an obfuscated address", async () => {
+    const result = await sourceCodeRiskDetector.run(
+      {
+        status: "VERIFIED",
+        address: context.address,
+        contractName: "PlainRouterToken",
+        compilerVersion: "v0.8.26",
+        language: "solidity",
+        sourceFiles: [
+          {
+            filename: "PlainRouterToken.sol",
+            sourceCode: `
+              contract PlainRouterToken {
+                address public constant ROUTER = 0x1111111111111111111111111111111111111111;
+              }
+            `
+          }
+        ]
+      },
+      context
+    );
+
+    expect(result.findings.map((finding) => finding.code)).not.toContain("SOURCE_OBFUSCATED_ADDRESS");
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({ code: "SOURCE_OBFUSCATED_ADDRESS_ABSENT", outcome: "PASSED" })
+    );
   });
 
   it("does not flag immutable max-wallet/max-tx limits with no owner or setter as a tax/limit control", async () => {

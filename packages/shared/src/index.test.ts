@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   assertRiskScore,
+  buildTokenSecuritySummary,
   createHealth,
   createScanId,
   liquidityHealthTier,
   normalizeEvmAddress,
   scannerVersion,
   selectPrimaryLiquidityPool,
-  type LiquidityPoolView
+  type LiquidityPoolView,
+  type ScanResultView
 } from "./index.js";
 
 describe("shared foundation contracts", () => {
@@ -77,5 +79,179 @@ describe("selectPrimaryLiquidityPool", () => {
 
   it("returns undefined for an empty pool list", () => {
     expect(selectPrimaryLiquidityPool([])).toBeUndefined();
+  });
+});
+
+describe("buildTokenSecuritySummary", () => {
+  it("returns partner-friendly Yes/No/Unknown signals without borrowing another product name", () => {
+    const scanResult: ScanResultView = {
+      scan: {
+        scanId: "scan-1",
+        chainId: 4663,
+        address: "0x1111111111111111111111111111111111111111",
+        state: "COMPLETED",
+        scannerVersion,
+        submittedAt: "2026-07-20T00:00:00.000Z",
+        completedAt: "2026-07-20T00:01:00.000Z",
+        message: "Complete."
+      },
+      token: {
+        chainId: 4663,
+        address: "0x1111111111111111111111111111111111111111",
+        ownershipStatus: "ACTIVE",
+        deployerAddress: "0x2222222222222222222222222222222222222222"
+      },
+      detectorChecks: [
+        {
+          id: "check-1",
+          detectorResultId: "detector-result-1",
+          detectorId: "blacklist-selector-patterns",
+          detectorVersion: "1.0.0",
+          code: "BLACKLIST_SELECTORS_PRESENT",
+          outcome: "DETECTED",
+          confidence: "HIGH",
+          evidence: []
+        },
+        {
+          id: "check-2",
+          detectorResultId: "detector-result-2",
+          detectorId: "mint-selector-patterns",
+          detectorVersion: "1.0.0",
+          code: "MINT_SELECTORS_PRESENT",
+          outcome: "PASSED",
+          confidence: "MEDIUM",
+          evidence: []
+        },
+        {
+          id: "check-3",
+          detectorResultId: "detector-result-3",
+          detectorId: "source-code-risk-patterns",
+          detectorVersion: "1.0.0",
+          code: "SOURCE_OBFUSCATED_ADDRESS_DETECTED",
+          outcome: "DETECTED",
+          confidence: "MEDIUM",
+          evidence: []
+        },
+        {
+          id: "check-4",
+          detectorResultId: "detector-result-4",
+          detectorId: "deployer-history",
+          detectorVersion: "1.0.0",
+          code: "WALLET_CLUSTERING_EDGES_FOUND",
+          outcome: "DETECTED",
+          confidence: "HIGH",
+          evidence: [
+            {
+              type: "EXTERNAL_SOURCE",
+              summary: "Related-wallet edges derived from on-chain evidence",
+              data: {
+                edges: [
+                  {
+                    type: "TRANSFERRED_SUPPLY_TO",
+                    address: "0x3333333333333333333333333333333333333333",
+                    confidence: "HIGH",
+                    evidence: "Deployer transferred 4.5% of total supply to this address.",
+                    source: "erc20-transfer-log-scan"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      findings: [],
+      liquidity: {
+        status: "UNSUPPORTED",
+        pools: [],
+        message: "Liquidity discovery was not run."
+      },
+      holders: {
+        status: "AVAILABLE",
+        snapshots: [
+          {
+            chainId: 4663,
+            tokenAddress: "0x1111111111111111111111111111111111111111",
+            blockNumber: "1",
+            holderCount: 10,
+            topHolders: {
+              holders: [
+                { address: "0x2222222222222222222222222222222222222222", totalSupplyPct: 1.25 },
+                { address: "0x3333333333333333333333333333333333333333", totalSupplyPct: 4.5 }
+              ]
+            },
+            concentration: {},
+            createdAt: "2026-07-20T00:01:00.000Z"
+          }
+        ],
+        message: "Holder analysis is available."
+      },
+      simulations: [
+        {
+          id: "simulation-1",
+          kind: "SELL",
+          outcome: "PASSED",
+          input: {},
+          result: { isHoneypot: false },
+          simulationTool: "test",
+          createdAt: "2026-07-20T00:01:00.000Z"
+        }
+      ],
+      risk: {
+        chainId: 4663,
+        address: "0x1111111111111111111111111111111111111111",
+        scannerVersion,
+        status: "AVAILABLE",
+        level: "MODERATE",
+        score: 33,
+        confidence: "MEDIUM",
+        categoryScores: [],
+        findingContributions: [],
+        unableToAssessReasons: [],
+        findingCounts: {
+          INFO: 0,
+          LOW: 0,
+          MEDIUM: 0,
+          HIGH: 0,
+          CRITICAL: 0
+        },
+        message: "Persisted risk assessment is available for this scan."
+      }
+    };
+
+    const summary = buildTokenSecuritySummary(scanResult, {
+      webAppUrl: "https://sentinel.genesispad.app/"
+    });
+
+    expect(summary.product).toBe("Genesis Sentinel");
+    expect(summary.fullAnalysisUrl).toBe(
+      "https://sentinel.genesispad.app/token/4663/0x1111111111111111111111111111111111111111"
+    );
+    expect(summary.devCluster).toMatchObject({
+      walletCount: 2,
+      knownHoldingPct: 5.75,
+      unknownHoldingWalletCount: 0
+    });
+    expect(JSON.stringify(summary)).not.toContain(["Quick", "Intel"].join(" "));
+    expect(summary.signals.find((signal) => signal.id === "can_block_wallets")).toMatchObject({
+      label: "Can block wallets",
+      answer: "YES"
+    });
+    expect(summary.signals.find((signal) => signal.id === "honeypot")).toMatchObject({
+      label: "Honeypot",
+      answer: "NO"
+    });
+    expect(summary.signals.find((signal) => signal.id === "can_create_more_tokens")).toMatchObject({
+      label: "Can create more tokens",
+      answer: "NO"
+    });
+    expect(summary.signals.find((signal) => signal.id === "obfuscated_address")).toMatchObject({
+      answer: "YES",
+      source: "DETECTOR"
+    });
+    expect(summary.signals.find((signal) => signal.id === "dev_cluster")).toMatchObject({
+      label: "Dev cluster",
+      answer: "YES",
+      value: "5.75% across 2 linked wallet(s)"
+    });
   });
 });

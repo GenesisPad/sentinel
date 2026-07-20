@@ -12,6 +12,7 @@ import type { ChainId } from "./chains";
 import { chainByNumericId } from "./chains";
 import type {
   ContractControls,
+  DevClusterInfo,
   Finding,
   HolderInfo,
   LiquidityInfo,
@@ -273,7 +274,7 @@ function mapLiquidity(view: ScanResultView): LiquidityInfo {
   };
 }
 
-function mapHolders(view: ScanResultView): HolderInfo {
+function mapHolders(view: ScanResultView, devCluster: DevClusterInfo): HolderInfo {
   const holderView = view.holders;
   const snapshot = holderView.snapshots[0];
   const concentration = snapshot?.concentration as
@@ -294,7 +295,10 @@ function mapHolders(view: ScanResultView): HolderInfo {
     top5Pct: concentration?.top5Pct ?? null,
     top10Pct: concentration?.top10Pct ?? null,
     holderCount: view.token.holderCount ?? snapshot?.holderCount,
-    ...(clusteredWithDeployer ? { clusteredWithDeployer } : {})
+    ...(clusteredWithDeployer ? { clusteredWithDeployer } : {}),
+    devClusterPct: devCluster.knownHoldingPct,
+    devClusterWalletCount: devCluster.walletCount,
+    devClusterUnknownHoldingWalletCount: devCluster.unknownHoldingWalletCount
   };
 }
 
@@ -364,6 +368,30 @@ function extractWalletCluster(view: ScanResultView): WalletClusterEdge[] {
       },
     ];
   });
+}
+
+function buildDevClusterSummary(view: ScanResultView, edges: WalletClusterEdge[]): DevClusterInfo {
+  const holderPctByAddress = buildHolderPctLookup(view);
+  const wallets = new Map<string, number | null>();
+
+  if (view.token.deployerAddress) {
+    const key = view.token.deployerAddress.toLowerCase();
+    wallets.set(key, holderPctByAddress.get(key) ?? null);
+  }
+
+  for (const edge of edges) {
+    if (edge.type !== "DEPLOYED_BY" && edge.type !== "TRANSFERRED_SUPPLY_TO") continue;
+    const key = edge.address.toLowerCase();
+    wallets.set(key, edge.holdingPct ?? holderPctByAddress.get(key) ?? null);
+  }
+
+  const holdingValues = [...wallets.values()].flatMap((pct) => (pct == null ? [] : [pct]));
+  return {
+    walletCount: wallets.size,
+    knownHoldingPct:
+      holdingValues.length > 0 ? holdingValues.reduce((total, pct) => total + pct, 0) : null,
+    unknownHoldingWalletCount: [...wallets.values()].filter((pct) => pct == null).length
+  };
 }
 
 /**
@@ -459,6 +487,8 @@ export function mapResultToReport(view: ScanResultView): ScanReport {
   const chainId = chainIdFor(view.scan.chainId);
   const riskScore = view.risk.score;
   const token = deriveTokenMeta(view, chainId, view.scan.address);
+  const walletCluster = extractWalletCluster(view);
+  const devCluster = buildDevClusterSummary(view, walletCluster);
 
   return {
     scanId: view.scan.scanId,
@@ -477,8 +507,9 @@ export function mapResultToReport(view: ScanResultView): ScanReport {
     controls: deriveControls(view.findings, view.scan.state, token.ownershipStatus),
     simulation: mapSimulations(view.simulations),
     liquidity: mapLiquidity(view),
-    holders: mapHolders(view),
-    walletCluster: extractWalletCluster(view),
+    holders: mapHolders(view, devCluster),
+    devCluster,
+    walletCluster,
     scannerVersion: view.scan.scannerVersion,
     block: view.scan.scanBlockNumber ? Number(view.scan.scanBlockNumber) : null,
     dataSource: `${chainByNumericId(view.scan.chainId)?.label ?? "Chain"} RPC`,

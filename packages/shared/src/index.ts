@@ -375,6 +375,594 @@ export interface RelatedWalletEdge {
   firstObservedBlock?: string;
 }
 
+export type SecuritySignalAnswer = "YES" | "NO" | "UNKNOWN";
+
+export type SecuritySignalSeverity = "GOOD" | "INFO" | "WARN" | "HIGH" | "CRITICAL";
+
+export type SecuritySignalSource =
+  | "DETECTOR"
+  | "SIMULATION"
+  | "TOKEN_PROFILE"
+  | "MISSING_DATA"
+  | "NOT_IMPLEMENTED";
+
+export interface SecuritySummarySignal {
+  id: string;
+  label: string;
+  answer: SecuritySignalAnswer;
+  severity: SecuritySignalSeverity;
+  confidence: FindingConfidence;
+  source: SecuritySignalSource;
+  description: string;
+  evidenceCodes: string[];
+  value?: string;
+}
+
+export interface DevClusterWalletView {
+  address: `0x${string}`;
+  role: RelatedWalletEdgeType;
+  holdingPct: number | null;
+  confidence: FindingConfidence;
+  evidence: string;
+}
+
+export interface DevClusterSummaryView {
+  walletCount: number;
+  knownHoldingPct: number | null;
+  unknownHoldingWalletCount: number;
+  wallets: DevClusterWalletView[];
+}
+
+export interface TokenSecuritySummaryView {
+  chainId: number;
+  address: `0x${string}`;
+  scanId: string;
+  scannerVersion: string;
+  scannedAt: string;
+  product: "Genesis Sentinel";
+  risk: RiskSnapshot;
+  issueCount: number;
+  fullAnalysisUrl?: string;
+  devCluster: DevClusterSummaryView;
+  signals: SecuritySummarySignal[];
+}
+
+export interface TokenSecuritySummaryOptions {
+  webAppUrl?: string;
+}
+
+const FINDING_CODES = {
+  blacklist: ["BLACKLIST_CAPABILITY_SURFACE", "SOURCE_BLACKLIST_CONTROL"],
+  hiddenOwner: ["SOURCE_OWNERSHIP_RECOVERY_SURFACE", "SOURCE_PRIVILEGED_ROLE_CONTROL"],
+  obfuscatedAddress: ["SOURCE_OBFUSCATED_ADDRESS"],
+  suspiciousFunctions: [
+    "DELEGATECALL_OPCODE_PRESENT",
+    "SELFDESTRUCT_OPCODE_PRESENT",
+    "SOURCE_ADMIN_TRANSFER_SURFACE",
+    "SOURCE_ARBITRARY_EXTERNAL_CALL",
+    "SOURCE_ROUTER_OR_PAIR_REPLACEMENT"
+  ],
+  proxy: ["PROXY_OR_UPGRADE_SURFACE", "EIP1967_PROXY_DETECTED", "EIP1967_BEACON_PROXY_DETECTED"],
+  mint: ["MINT_CAPABILITY_SURFACE", "SOURCE_MINT_OR_SUPPLY_CONTROL"],
+  pause: ["PAUSE_CAPABILITY_SURFACE"],
+  cooldown: ["COOLDOWN_CAPABILITY_SURFACE", "SOURCE_TRADING_COOLDOWN_CONTROL"],
+  tradingControl: ["TRADING_CONTROL_SURFACE", "SOURCE_TRADING_TOGGLE"],
+  whitelist: ["FEE_EXCLUSION_CAPABILITY_SURFACE"],
+  ownershipActive: ["OWNERSHIP_NOT_RENOUNCED"],
+  ownershipRenounced: ["OWNERSHIP_RENOUNCED"]
+} as const;
+
+const CHECK_CODES = {
+  blacklist: ["BLACKLIST_SELECTORS_PRESENT"],
+  blacklistSourceAbsent: ["SOURCE_BLACKLIST_CONTROL_ABSENT"],
+  hiddenOwnerAbsent: ["SOURCE_OWNERSHIP_RECOVERY_SURFACE_ABSENT", "SOURCE_PRIVILEGED_ROLE_CONTROL_ABSENT"],
+  obfuscatedAddress: ["SOURCE_OBFUSCATED_ADDRESS_DETECTED"],
+  obfuscatedAddressAbsent: ["SOURCE_OBFUSCATED_ADDRESS_ABSENT"],
+  suspiciousAbsent: [
+    "DELEGATECALL_OPCODE_ABSENT",
+    "SELFDESTRUCT_OPCODE_ABSENT",
+    "SOURCE_ADMIN_TRANSFER_SURFACE_ABSENT",
+    "SOURCE_ARBITRARY_EXTERNAL_CALL_ABSENT",
+    "SOURCE_ROUTER_OR_PAIR_REPLACEMENT_ABSENT"
+  ],
+  proxy: ["PROXY_SELECTORS_PRESENT"],
+  proxyAbsent: ["PROXY_SELECTORS_PRESENT", "EIP1967_PROXY_ABSENT"],
+  mint: ["MINT_SELECTORS_PRESENT"],
+  pause: ["PAUSE_SELECTORS_PRESENT"],
+  cooldown: ["COOLDOWN_SELECTORS_PRESENT"],
+  whitelist: ["FEE_EXCLUSION_SELECTORS_PRESENT"],
+  ownershipRenounced: ["OWNERSHIP_RENOUNCED"],
+  ownershipActive: ["OWNERSHIP_ACTIVE"]
+} as const;
+
+export function buildTokenSecuritySummary(
+  result: ScanResultView,
+  options: TokenSecuritySummaryOptions = {}
+): TokenSecuritySummaryView {
+  const context = createSecuritySignalContext(result);
+  const highIssueSeverities = new Set<FindingSeverity>(["HIGH", "CRITICAL"]);
+  const fullAnalysisUrl = buildFullAnalysisUrl(options.webAppUrl, result.token.chainId, result.token.address);
+  const devCluster = buildDevClusterSummary(result);
+
+  const summary: TokenSecuritySummaryView = {
+    chainId: result.token.chainId,
+    address: result.token.address,
+    scanId: result.scan.scanId,
+    scannerVersion: result.scan.scannerVersion,
+    scannedAt: result.scan.completedAt ?? result.scan.submittedAt,
+    product: "Genesis Sentinel",
+    risk: result.risk,
+    issueCount: result.findings.filter((finding) => highIssueSeverities.has(finding.severity)).length,
+    devCluster,
+    signals: [
+      detectorSignal(context, {
+        id: "can_block_wallets",
+        label: "Can block wallets",
+        description: "Whether the contract appears able to block specific wallets from transferring or selling.",
+        yesFindings: FINDING_CODES.blacklist,
+        detectedChecks: CHECK_CODES.blacklist,
+        noChecks: [...CHECK_CODES.blacklist, ...CHECK_CODES.blacklistSourceAbsent]
+      }),
+      detectorSignal(context, {
+        id: "hidden_owner_controls",
+        label: "Hidden owner/admin controls",
+        description: "Whether source analysis found owner recovery, privileged roles, or similar hidden admin control paths.",
+        yesFindings: FINDING_CODES.hiddenOwner,
+        noChecks: CHECK_CODES.hiddenOwnerAbsent
+      }),
+      detectorSignal(context, {
+        id: "obfuscated_address",
+        label: "Hidden or obfuscated addresses",
+        description: "Whether verified source code reconstructs or masks address constants instead of declaring them plainly.",
+        yesFindings: FINDING_CODES.obfuscatedAddress,
+        detectedChecks: CHECK_CODES.obfuscatedAddress,
+        noChecks: CHECK_CODES.obfuscatedAddressAbsent
+      }),
+      detectorSignal(context, {
+        id: "suspicious_functions",
+        label: "Suspicious functions",
+        description: "Whether dangerous opcodes or high-risk admin surfaces were detected.",
+        yesFindings: FINDING_CODES.suspiciousFunctions,
+        noChecks: CHECK_CODES.suspiciousAbsent
+      }),
+      honeypotSignal(result),
+      detectorSignal(context, {
+        id: "proxy_contract",
+        label: "Proxy contract",
+        description: "Whether the token appears upgradeable or routed through a proxy contract.",
+        yesFindings: FINDING_CODES.proxy,
+        detectedChecks: CHECK_CODES.proxy,
+        noChecks: CHECK_CODES.proxyAbsent
+      }),
+      detectorSignal(context, {
+        id: "can_create_more_tokens",
+        label: "Can create more tokens",
+        description: "Whether minting or supply-changing controls were detected.",
+        yesFindings: FINDING_CODES.mint,
+        detectedChecks: CHECK_CODES.mint,
+        noChecks: CHECK_CODES.mint
+      }),
+      detectorSignal(context, {
+        id: "can_pause_transfers",
+        label: "Can pause transfers",
+        description: "Whether the contract appears able to pause token transfers.",
+        yesFindings: FINDING_CODES.pause,
+        detectedChecks: CHECK_CODES.pause,
+        noChecks: CHECK_CODES.pause
+      }),
+      detectorSignal(context, {
+        id: "trading_cooldown",
+        label: "Trading cooldown",
+        description: "Whether cooldown, transfer-delay, anti-bot, or anti-snipe controls were detected.",
+        yesFindings: FINDING_CODES.cooldown,
+        detectedChecks: CHECK_CODES.cooldown,
+        noChecks: CHECK_CODES.cooldown
+      }),
+      devClusterSignal(devCluster),
+      detectorSignal(context, {
+        id: "has_whitelist",
+        label: "Whitelist or exempt wallets",
+        description: "Whether fee, limit, or trading exemptions for selected wallets were detected.",
+        yesFindings: FINDING_CODES.whitelist,
+        detectedChecks: CHECK_CODES.whitelist,
+        noChecks: CHECK_CODES.whitelist
+      }),
+      ownershipSignal(result),
+      creatorAddressSignal(result)
+    ]
+  };
+
+  if (fullAnalysisUrl) {
+    summary.fullAnalysisUrl = fullAnalysisUrl;
+  }
+
+  return summary;
+}
+
+interface SecuritySignalContext {
+  findingCodes: Set<string>;
+  checkCodesByOutcome: Map<CheckOutcome, Set<string>>;
+}
+
+function createSecuritySignalContext(result: ScanResultView): SecuritySignalContext {
+  const checkCodesByOutcome = new Map<CheckOutcome, Set<string>>();
+  for (const check of result.detectorChecks) {
+    const codes = checkCodesByOutcome.get(check.outcome) ?? new Set<string>();
+    codes.add(check.code);
+    checkCodesByOutcome.set(check.outcome, codes);
+  }
+
+  return {
+    findingCodes: new Set(result.findings.map((finding) => finding.code)),
+    checkCodesByOutcome
+  };
+}
+
+function detectorSignal(
+  context: SecuritySignalContext,
+  input: {
+    id: string;
+    label: string;
+    description: string;
+    yesFindings: readonly string[];
+    detectedChecks?: readonly string[];
+    noChecks?: readonly string[];
+  }
+): SecuritySummarySignal {
+  const evidenceCodes = [
+    ...input.yesFindings.filter((code) => context.findingCodes.has(code)),
+    ...(input.detectedChecks ?? []).filter((code) => hasCheck(context, "DETECTED", code))
+  ];
+
+  if (evidenceCodes.length > 0) {
+    return {
+      id: input.id,
+      label: input.label,
+      answer: "YES",
+      severity: "HIGH",
+      confidence: "HIGH",
+      source: "DETECTOR",
+      description: input.description,
+      evidenceCodes: unique(evidenceCodes)
+    };
+  }
+
+  const noEvidenceCodes = (input.noChecks ?? []).filter((code) => hasCheck(context, "PASSED", code));
+  if (noEvidenceCodes.length > 0) {
+    return {
+      id: input.id,
+      label: input.label,
+      answer: "NO",
+      severity: "GOOD",
+      confidence: "MEDIUM",
+      source: "DETECTOR",
+      description: input.description,
+      evidenceCodes: unique(noEvidenceCodes)
+    };
+  }
+
+  return unknownSignal(input.id, input.label, input.description, "MISSING_DATA");
+}
+
+function honeypotSignal(result: ScanResultView): SecuritySummarySignal {
+  const simulation = result.simulations.find((run) => typeof run.result?.isHoneypot === "boolean");
+  if (!simulation || typeof simulation.result?.isHoneypot !== "boolean") {
+    return unknownSignal(
+      "honeypot",
+      "Honeypot",
+      "Whether a sell simulation indicates buyers may be unable to sell.",
+      "MISSING_DATA"
+    );
+  }
+
+  const value = simulation.result.isHoneypot;
+  return {
+    id: "honeypot",
+    label: "Honeypot",
+    answer: value ? "YES" : "NO",
+    severity: value ? "CRITICAL" : "GOOD",
+    confidence: "HIGH",
+    source: "SIMULATION",
+    description: "Whether a sell simulation indicates buyers may be unable to sell.",
+    evidenceCodes: [simulation.kind, simulation.outcome]
+  };
+}
+
+function ownershipSignal(result: ScanResultView): SecuritySummarySignal {
+  if (result.token.ownershipStatus === "RENOUNCED") {
+    return {
+      id: "ownership_renounced",
+      label: "Ownership renounced",
+      answer: "YES",
+      severity: "GOOD",
+      confidence: "HIGH",
+      source: "TOKEN_PROFILE",
+      description: "Whether the token owner has been renounced.",
+      evidenceCodes: ["TOKEN_PROFILE_OWNERSHIP_RENOUNCED"]
+    };
+  }
+
+  if (result.token.ownershipStatus === "ACTIVE") {
+    return {
+      id: "ownership_renounced",
+      label: "Ownership renounced",
+      answer: "NO",
+      severity: "WARN",
+      confidence: "HIGH",
+      source: "TOKEN_PROFILE",
+      description: "Whether the token owner has been renounced.",
+      evidenceCodes: ["TOKEN_PROFILE_OWNERSHIP_ACTIVE"]
+    };
+  }
+
+  const context = createSecuritySignalContext(result);
+  const renouncedEvidence = [
+    ...FINDING_CODES.ownershipRenounced.filter((code) => context.findingCodes.has(code)),
+    ...CHECK_CODES.ownershipRenounced.filter((code) => hasCheck(context, "PASSED", code))
+  ];
+  if (renouncedEvidence.length > 0) {
+    return {
+      id: "ownership_renounced",
+      label: "Ownership renounced",
+      answer: "YES",
+      severity: "GOOD",
+      confidence: "MEDIUM",
+      source: "DETECTOR",
+      description: "Whether the token owner has been renounced.",
+      evidenceCodes: unique(renouncedEvidence)
+    };
+  }
+
+  const activeEvidence = [
+    ...FINDING_CODES.ownershipActive.filter((code) => context.findingCodes.has(code)),
+    ...CHECK_CODES.ownershipActive.filter((code) => hasCheck(context, "DETECTED", code))
+  ];
+  if (activeEvidence.length > 0) {
+    return {
+      id: "ownership_renounced",
+      label: "Ownership renounced",
+      answer: "NO",
+      severity: "WARN",
+      confidence: "MEDIUM",
+      source: "DETECTOR",
+      description: "Whether the token owner has been renounced.",
+      evidenceCodes: unique(activeEvidence)
+    };
+  }
+
+  return unknownSignal(
+    "ownership_renounced",
+    "Ownership renounced",
+    "Whether the token owner has been renounced.",
+    "MISSING_DATA"
+  );
+}
+
+function creatorAddressSignal(result: ScanResultView): SecuritySummarySignal {
+  if (!result.token.deployerAddress) {
+    return unknownSignal(
+      "creator_address",
+      "Creator address",
+      "The wallet or contract that deployed the token.",
+      "MISSING_DATA"
+    );
+  }
+
+  return {
+    id: "creator_address",
+    label: "Creator address",
+    answer: "YES",
+    severity: "INFO",
+    confidence: "HIGH",
+    source: "TOKEN_PROFILE",
+    description: "The wallet or contract that deployed the token.",
+    evidenceCodes: ["TOKEN_PROFILE_DEPLOYER_ADDRESS"],
+    value: result.token.deployerAddress
+  };
+}
+
+function devClusterSignal(cluster: DevClusterSummaryView): SecuritySummarySignal {
+  if (cluster.walletCount === 0) {
+    return {
+      id: "dev_cluster",
+      label: "Dev cluster",
+      answer: "NO",
+      severity: "GOOD",
+      confidence: "MEDIUM",
+      source: "DETECTOR",
+      description: "Known supply held by the deployer wallet and wallets linked to it by on-chain evidence.",
+      evidenceCodes: ["WALLET_CLUSTERING_EDGES_ABSENT"]
+    };
+  }
+
+  const knownPct = cluster.knownHoldingPct;
+  const severity: SecuritySignalSeverity =
+    knownPct == null ? "INFO" : knownPct >= 20 ? "HIGH" : knownPct >= 10 ? "WARN" : "INFO";
+  return {
+    id: "dev_cluster",
+    label: "Dev cluster",
+    answer: knownPct != null && knownPct > 0 ? "YES" : "UNKNOWN",
+    severity,
+    confidence: cluster.unknownHoldingWalletCount > 0 ? "MEDIUM" : "HIGH",
+    source: "DETECTOR",
+    description: "Known supply held by the deployer wallet and wallets linked to it by on-chain evidence.",
+    evidenceCodes: ["WALLET_CLUSTERING_EDGES_FOUND"],
+    value:
+      knownPct == null
+        ? `${cluster.walletCount} linked wallet(s), holdings unknown`
+        : `${knownPct.toFixed(2)}% across ${cluster.walletCount} linked wallet(s)`
+  };
+}
+
+function buildFullAnalysisUrl(
+  webAppUrl: string | undefined,
+  chainId: number,
+  address: `0x${string}`
+): string | undefined {
+  if (!webAppUrl) return undefined;
+  return `${webAppUrl.replace(/\/+$/u, "")}/token/${chainId}/${address}`;
+}
+
+function buildDevClusterSummary(result: ScanResultView): DevClusterSummaryView {
+  const holderPctByAddress = buildHolderPctLookup(result);
+  const walletsByAddress = new Map<string, DevClusterWalletView>();
+
+  const addWallet = (
+    address: `0x${string}`,
+    role: RelatedWalletEdgeType,
+    confidence: FindingConfidence,
+    evidence: string
+  ) => {
+    const key = address.toLowerCase();
+    const existing = walletsByAddress.get(key);
+    const next: DevClusterWalletView = {
+      address,
+      role,
+      holdingPct: holderPctByAddress.get(key) ?? null,
+      confidence,
+      evidence
+    };
+
+    if (!existing || confidenceRank(next.confidence) > confidenceRank(existing.confidence)) {
+      walletsByAddress.set(key, next);
+    }
+  };
+
+  if (result.token.deployerAddress) {
+    addWallet(
+      result.token.deployerAddress,
+      "DEPLOYED_BY",
+      "HIGH",
+      "Explorer token profile reports this address as the contract deployer."
+    );
+  }
+
+  for (const edge of extractRelatedWalletEdges(result)) {
+    if (edge.type === "DEPLOYED_BY" || edge.type === "TRANSFERRED_SUPPLY_TO") {
+      addWallet(edge.address, edge.type, edge.confidence, edge.evidence);
+    }
+  }
+
+  const wallets = [...walletsByAddress.values()].sort((a, b) => {
+    const bPct = b.holdingPct ?? -1;
+    const aPct = a.holdingPct ?? -1;
+    return bPct - aPct;
+  });
+  const knownValues = wallets.flatMap((wallet) => (wallet.holdingPct == null ? [] : [wallet.holdingPct]));
+  const knownHoldingPct =
+    knownValues.length > 0 ? knownValues.reduce((total, pct) => total + pct, 0) : null;
+
+  return {
+    walletCount: wallets.length,
+    knownHoldingPct,
+    unknownHoldingWalletCount: wallets.filter((wallet) => wallet.holdingPct == null).length,
+    wallets
+  };
+}
+
+function buildHolderPctLookup(result: ScanResultView): Map<string, number> {
+  const snapshot = result.holders.snapshots[0];
+  const topHolders = snapshot?.topHolders as { holders?: unknown[] } | undefined;
+  const lookup = new Map<string, number>();
+  if (!Array.isArray(topHolders?.holders)) return lookup;
+
+  for (const holder of topHolders.holders) {
+    if (typeof holder !== "object" || holder === null) continue;
+    const record = holder as Record<string, unknown>;
+    const { address, totalSupplyPct } = record;
+    if (typeof address === "string" && typeof totalSupplyPct === "number") {
+      lookup.set(address.toLowerCase(), totalSupplyPct);
+    }
+  }
+
+  return lookup;
+}
+
+function extractRelatedWalletEdges(result: ScanResultView): RelatedWalletEdge[] {
+  const check = result.detectorChecks.find((item) => item.code === "WALLET_CLUSTERING_EDGES_FOUND");
+  const edges = check?.evidence[0]?.data.edges;
+  if (!Array.isArray(edges)) return [];
+
+  return edges.flatMap((edge): RelatedWalletEdge[] => {
+    if (typeof edge !== "object" || edge === null) return [];
+    const record = edge as Record<string, unknown>;
+    const { type, address, confidence, evidence, source, firstObservedBlock } = record;
+    if (
+      !isRelatedWalletEdgeType(type) ||
+      typeof address !== "string" ||
+      !isEvmAddress(address) ||
+      !isFindingConfidence(confidence) ||
+      typeof evidence !== "string" ||
+      typeof source !== "string"
+    ) {
+      return [];
+    }
+
+    const view: RelatedWalletEdge = {
+      type,
+      address,
+      confidence,
+      evidence,
+      source
+    };
+    if (typeof firstObservedBlock === "string") {
+      view.firstObservedBlock = firstObservedBlock;
+    }
+    return [view];
+  });
+}
+
+function isRelatedWalletEdgeType(value: unknown): value is RelatedWalletEdgeType {
+  return (
+    value === "FUNDED_BY" ||
+    value === "DEPLOYED_BY" ||
+    value === "OWNED_BY" ||
+    value === "PREVIOUSLY_OWNED_BY" ||
+    value === "SHARED_BYTECODE" ||
+    value === "TRANSFERRED_SUPPLY_TO"
+  );
+}
+
+function isFindingConfidence(value: unknown): value is FindingConfidence {
+  return value === "LOW" || value === "MEDIUM" || value === "HIGH";
+}
+
+function isEvmAddress(value: string): value is `0x${string}` {
+  return /^0x[a-fA-F0-9]{40}$/.test(value);
+}
+
+function confidenceRank(confidence: FindingConfidence): number {
+  if (confidence === "HIGH") return 3;
+  if (confidence === "MEDIUM") return 2;
+  return 1;
+}
+
+function unknownSignal(
+  id: string,
+  label: string,
+  description: string,
+  source: Extract<SecuritySignalSource, "MISSING_DATA" | "NOT_IMPLEMENTED">
+): SecuritySummarySignal {
+  return {
+    id,
+    label,
+    answer: "UNKNOWN",
+    severity: "INFO",
+    confidence: "LOW",
+    source,
+    description,
+    evidenceCodes: []
+  };
+}
+
+function hasCheck(context: SecuritySignalContext, outcome: CheckOutcome, code: string): boolean {
+  return context.checkCodesByOutcome.get(outcome)?.has(code) ?? false;
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
 export function createHealth(service: string): ServiceHealth {
   return {
     status: "ok",

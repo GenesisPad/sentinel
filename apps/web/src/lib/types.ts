@@ -112,6 +112,9 @@ export interface HolderInfo {
   top10Pct: number | null;
   holderCount?: number;
   clusteredWithDeployer?: number;
+  devClusterPct?: number | null;
+  devClusterWalletCount?: number;
+  devClusterUnknownHoldingWalletCount?: number;
 }
 
 export type WalletClusterEdgeType =
@@ -134,6 +137,12 @@ export interface WalletClusterEdge {
    * snapshot. Null/undefined when the address isn't in that snapshot (e.g. it fell outside the
    * top-N holders tracked) — never estimated. */
   holdingPct?: number | null;
+}
+
+export interface DevClusterInfo {
+  walletCount: number;
+  knownHoldingPct: number | null;
+  unknownHoldingWalletCount: number;
 }
 
 export interface ContractControls {
@@ -202,6 +211,7 @@ export interface ScanReport {
   simulation: TradeSimulation;
   liquidity: LiquidityInfo;
   holders: HolderInfo;
+  devCluster: DevClusterInfo;
   /** Real, evidenced wallet-relationship edges (Milestone 6) — empty when none were found. */
   walletCluster: WalletClusterEdge[];
   scannerVersion: string;

@@ -185,7 +185,15 @@ export function buildFixtureReport(chainId: ChainId, address: string): ScanRepor
       top5Pct: 41.7,
       top10Pct: 63.2,
       holderCount: 2341,
-      clusteredWithDeployer: 3
+      clusteredWithDeployer: 3,
+      devClusterPct: 19,
+      devClusterWalletCount: 2,
+      devClusterUnknownHoldingWalletCount: 1
+    },
+    devCluster: {
+      walletCount: 2,
+      knownHoldingPct: 19,
+      unknownHoldingWalletCount: 1
     },
     walletCluster: [
       {
@@ -193,14 +201,16 @@ export function buildFixtureReport(chainId: ChainId, address: string): ScanRepor
         address: DEMO_ADDRESS,
         confidence: "high",
         evidence: "Explorer token profile reports this address as the contract deployer.",
-        source: "explorer-token-profile"
+        source: "explorer-token-profile",
+        holdingPct: 1
       },
       {
         type: "TRANSFERRED_SUPPLY_TO",
         address: "0x00000000000000000000000000000000000d31",
         confidence: "high",
         evidence: "This token's deployer transferred ~18.0% of total supply to this address.",
-        source: "erc20-transfer-log-scan"
+        source: "erc20-transfer-log-scan",
+        holdingPct: 18
       },
       {
         type: "FUNDED_BY",

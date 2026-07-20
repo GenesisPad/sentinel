@@ -394,6 +394,30 @@ const selectorRules: SelectorRule[] = [
     signatures: ["setMaxTxAmount(uint256)", "setMaxWalletAmount(uint256)"]
   },
   {
+    detectorId: "cooldown-selector-patterns",
+    detectorName: "Common cooldown and anti-bot selectors",
+    detectorDescription:
+      "Detects common cooldown, transfer-delay, and anti-bot function selectors in bytecode.",
+    checkCode: "COOLDOWN_SELECTORS_PRESENT",
+    findingCode: "COOLDOWN_CAPABILITY_SURFACE",
+    title: "Cooldown or anti-bot control surface detected",
+    severity: "MEDIUM",
+    category: "TRADING_SAFETY",
+    description:
+      "The bytecode contains selectors commonly associated with cooldown, transfer-delay, or anti-bot controls.",
+    technicalExplanation:
+      "Selector presence indicates the contract may restrict how frequently wallets can trade or transfer. It does not prove the cooldown is currently active.",
+    recommendation:
+      "Verify current cooldown settings and whether a privileged role can change or re-enable them.",
+    signatures: [
+      "setCooldown(uint256)",
+      "setCooldownEnabled(bool)",
+      "setTransferDelayEnabled(bool)",
+      "setAntiBotEnabled(bool)",
+      "removeLimits()"
+    ]
+  },
+  {
     detectorId: "trading-control-selector-patterns",
     detectorName: "Common trading-enable/disable selectors",
     detectorDescription: "Detects common trading-enable/disable function selectors in bytecode.",
@@ -754,12 +778,30 @@ const sourceRiskRules: SourceRiskRule[] = [
     description:
       "Verified source code contains address-restriction controls that may let privileged roles block buys, sells, or transfers.",
     technicalExplanation:
-      "The detector matched blacklist, blocklist, bot-list, or cooldown control terms in verified source code.",
+      "The detector matched blacklist, blocklist, or bot-list control terms in verified source code.",
     recommendation:
       "Review who can call these controls and whether trade simulation confirms normal buyers can still sell.",
     patterns: [
-      /\b(?:blacklist|blacklisted|blocklist|blocked|isBot|bots|sniper|cooldown|antiBot)\b/i,
+      /\b(?:blacklist|blacklisted|blocklist|blocked|isBot|bots)\b/i,
       /\bmapping\s*\([^)]*address[^)]*\)\s*(?:public|private|internal)?\s*(?:_|is)?(?:blacklist|blacklisted|blocklist|blocked|bot|bots)/i
+    ]
+  },
+  {
+    code: "SOURCE_TRADING_COOLDOWN_CONTROL",
+    title: "Source code exposes cooldown or anti-bot controls",
+    severity: "MEDIUM",
+    category: "TRADING_SAFETY",
+    confidence: "HIGH",
+    description:
+      "Verified source code contains cooldown, transfer-delay, anti-bot, or anti-snipe controls that can restrict when wallets may trade.",
+    technicalExplanation:
+      "The detector matched cooldown, transfer-delay, anti-bot, anti-snipe, launch-window, or per-wallet transfer-timestamp terms in verified source code.",
+    recommendation:
+      "Review whether the cooldown is temporary/fixed or can be changed by a privileged role after launch.",
+    patterns: [
+      /\b(?:cooldown|coolDown|transferDelay|antiBot|antiSnipe|sniper|launchBlock|limitsInEffect|_holderLastTransferTimestamp|lastTransferTimestamp)\b/i,
+      /\bfunction\s+\w*(?:setCooldown|setTransferDelay|setAntiBot|setAntiSnipe|removeLimits)\w*\s*\(/i,
+      /\bmapping\s*\([^)]*address[^)]*\)\s*(?:public|private|internal)?\s*\w*(?:cooldown|lastTransfer|lastTx)\w*/i
     ]
   },
   {
@@ -828,6 +870,24 @@ const sourceRiskRules: SourceRiskRule[] = [
     patterns: [
       /\b(?:forceTransfer|forcedTransfer|adminTransfer|operatorTransfer|seize|confiscate|clawback|wipe|burnFrom)\b/i,
       /function\s+\w*(?:rescue|recover|sweep)\w*\s*\([^)]*address\s+(?:token|from|account|wallet)/i
+    ]
+  },
+  {
+    code: "SOURCE_OBFUSCATED_ADDRESS",
+    title: "Source code contains hidden or obfuscated address construction",
+    severity: "HIGH",
+    category: "CONTRACT_CONTROL",
+    confidence: "MEDIUM",
+    description:
+      "Verified source code appears to reconstruct or mask address constants instead of declaring them plainly.",
+    technicalExplanation:
+      "The detector matched address constants converted through integer casts, bitwise masking/XOR, or short assembly blocks. Plain router/pair address constants are not enough to trigger this rule.",
+    recommendation:
+      "Manually inspect the matched address construction and confirm what wallet or contract it resolves to before trusting ownership, routing, or fee destinations.",
+    patterns: [
+      /\baddress\s*\(\s*uint160\s*\(\s*(?:uint256\s*\(\s*)?0x[a-fA-F0-9]{20,64}\s*\)?\s*\)\s*\)/i,
+      /\baddress\s*\(\s*uint160\s*\([^)]*(?:\^|&|\|)[^)]*0x[a-fA-F0-9]{20,64}[^)]*\)\s*\)/i,
+      /\bassembly\s*\{[\s\S]{0,500}\b(?:mstore|sstore)\b[\s\S]{0,160}0x[a-fA-F0-9]{40,64}[\s\S]{0,500}\}/i
     ]
   },
   {

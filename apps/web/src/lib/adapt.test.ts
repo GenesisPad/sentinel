@@ -429,9 +429,14 @@ describe("mapResultToReport", () => {
     ]);
   });
 
-  it("attaches holdingPct to a wallet-cluster edge when the address appears in the top-holders snapshot", () => {
+  it("attaches holdingPct and aggregates the dev cluster when linked wallets appear in the top-holders snapshot", () => {
     const report = mapResultToReport(
       baseView({
+        token: {
+          chainId: 4663,
+          address: ADDRESS,
+          deployerAddress: "0x0000000000000000000000000000000000000d3d"
+        },
         detectorChecks: [
           {
             id: "check-1",
@@ -470,6 +475,7 @@ describe("mapResultToReport", () => {
               blockNumber: "6942713",
               topHolders: {
                 holders: [
+                  { address: "0x0000000000000000000000000000000000000d3d", totalSupplyPct: 1.2 },
                   { address: "0x00000000000000000000000000000000000d31", totalSupplyPct: 18.4 }
                 ]
               },
@@ -482,6 +488,10 @@ describe("mapResultToReport", () => {
     );
 
     expect(report.walletCluster[0]?.holdingPct).toBe(18.4);
+    expect(report.devCluster.walletCount).toBe(2);
+    expect(report.devCluster.knownHoldingPct).toBeCloseTo(19.6);
+    expect(report.devCluster.unknownHoldingWalletCount).toBe(0);
+    expect(report.holders.devClusterPct).toBeCloseTo(19.6);
   });
 
   it("returns an empty wallet cluster when no clustering check is present", () => {

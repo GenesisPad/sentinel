@@ -20,10 +20,10 @@ const TONE_HEX: Record<Tone, string> = {
 
 export function ContractControlsGrid({ controls }: { controls: Controls }) {
   const rows = [
-    control("Can mint", controls.canMint, true),
-    control("Can blacklist", controls.canBlacklist, true),
-    control("Can pause trading", controls.canPause, true),
-    control("Can change taxes", controls.canChangeTaxes, true),
+    control("Can create more tokens", controls.canMint, true),
+    control("Can block wallets", controls.canBlacklist, true),
+    control("Can pause transfers", controls.canPause, true),
+    control("Can change taxes or fees", controls.canChangeTaxes, true),
     controls.ownershipRenounced != null
       ? {
           label: "Ownership renounced",
@@ -31,10 +31,10 @@ export function ContractControlsGrid({ controls }: { controls: Controls }) {
           tone: controls.ownershipRenounced ? "good" : "warn",
         }
       : null,
-    control("Is proxy / upgradeable", controls.isProxy, true),
-    control("Can limit max tx / wallet", controls.canLimitTransactions, true),
-    control("Can disable trading", controls.canDisableTrading, true),
-    control("Has fee/limit whitelist", controls.hasFeeWhitelist, true),
+    control("Proxy or upgradeable contract", controls.isProxy, true),
+    control("Can limit trade or wallet size", controls.canLimitTransactions, true),
+    control("Can stop trading", controls.canDisableTrading, true),
+    control("Has whitelist or exempt wallets", controls.hasFeeWhitelist, true),
   ].filter((row): row is { label: string; text: string; tone: Tone } => row !== null);
 
   if (rows.length === 0) {

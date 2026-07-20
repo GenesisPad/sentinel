@@ -3,7 +3,7 @@ import { useId, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import type { ChainId } from "@/lib/chains";
 import { CHAINS } from "@/lib/chains";
-import type { WalletClusterEdge, WalletClusterEdgeType } from "@/lib/types";
+import type { DevClusterInfo, WalletClusterEdge, WalletClusterEdgeType } from "@/lib/types";
 import { shortAddress } from "@/lib/utils";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { EmptyState } from "@/components/empty-state";
@@ -39,11 +39,13 @@ export function WalletClusterGraph({
   tokenSymbol,
   tokenAddress,
   edges,
+  devCluster,
 }: {
   chainId: ChainId;
   tokenSymbol?: string | null;
   tokenAddress: string;
   edges: WalletClusterEdge[];
+  devCluster?: DevClusterInfo;
 }) {
   const gradientId = useId();
   const reducedMotion = usePrefersReducedMotion();
@@ -71,6 +73,24 @@ export function WalletClusterGraph({
 
   return (
     <div className="flex flex-col gap-4">
+      {devCluster && devCluster.walletCount > 0 ? (
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          <div className="rounded-lg border border-border bg-surface-deep px-3.5 py-2.5">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">Dev cluster</div>
+            <div className="mt-1 text-lg font-extrabold text-foreground">
+              {devCluster.knownHoldingPct != null ? `${devCluster.knownHoldingPct.toFixed(2)}%` : "Unknown"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-deep px-3.5 py-2.5">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">Linked wallets</div>
+            <div className="mt-1 text-lg font-extrabold text-foreground">{devCluster.walletCount}</div>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-deep px-3.5 py-2.5">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">Unknown holdings</div>
+            <div className="mt-1 text-lg font-extrabold text-foreground">{devCluster.unknownHoldingWalletCount}</div>
+          </div>
+        </div>
+      ) : null}
       <div className="relative mx-auto w-full max-w-[440px]">
         <svg
           viewBox={`0 0 ${SIZE} ${SIZE}`}

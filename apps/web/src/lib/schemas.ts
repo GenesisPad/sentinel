@@ -145,7 +145,15 @@ export const scanReportSchema = z.object({
     top5Pct: z.number().nullable(),
     top10Pct: z.number().nullable(),
     holderCount: z.number().optional(),
-    clusteredWithDeployer: z.number().optional()
+    clusteredWithDeployer: z.number().optional(),
+    devClusterPct: z.number().nullable().optional(),
+    devClusterWalletCount: z.number().optional(),
+    devClusterUnknownHoldingWalletCount: z.number().optional()
+  }),
+  devCluster: z.object({
+    walletCount: z.number(),
+    knownHoldingPct: z.number().nullable(),
+    unknownHoldingWalletCount: z.number()
   }),
   scannerVersion: z.string(),
   block: z.number().nullable(),

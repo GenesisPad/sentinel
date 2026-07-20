@@ -17,6 +17,7 @@ import {
 import type { Logger } from "pino";
 import { checkRedis, createScanQueue, type ScanQueue } from "@genesis-sentinel/queue";
 import {
+  buildTokenSecuritySummary,
   createHealth,
   normalizeEvmAddress,
   scannerVersion,
@@ -67,7 +68,8 @@ const recentScansQuerySchema = z.object({
 
 const createApiKeySchema = z.object({
   name: z.string().trim().min(1).max(100),
-  scopes: z.array(z.enum(["scan:read", "scan:write"])).nonempty().optional()
+  scopes: z.array(z.enum(["scan:read", "scan:write"])).nonempty().optional(),
+  rateLimitPerMinute: z.coerce.number().int().min(1).max(100_000).optional()
 });
 
 /** Anonymous (no API key) requests to POST /v1/scans get a stricter shared limit than a
@@ -113,7 +115,9 @@ export async function buildApp({ env, logger, scanRepository, scanQueue, apiKeyR
   });
 
   await app.register(rateLimit, {
-    max: env.API_RATE_LIMIT_MAX,
+    hook: "preHandler",
+    max: (request) => Math.max(env.API_RATE_LIMIT_MAX, request.apiKey?.rateLimitPerMinute ?? 0),
+    keyGenerator: (request) => request.apiKey?.id ?? request.ip,
     timeWindow: env.API_RATE_LIMIT_TIME_WINDOW
   });
 
@@ -226,6 +230,12 @@ export async function buildApp({ env, logger, scanRepository, scanQueue, apiKeyR
 
     telegramBotInit ??= telegramBot.init();
     await telegramBotInit;
+  };
+
+  const isAdminRequest = (request: { headers: Record<string, string | string[] | undefined> }) => {
+    const presented = request.headers["x-admin-secret"];
+    const secret = Array.isArray(presented) ? presented[0] : presented;
+    return Boolean(env.API_ADMIN_SECRET && secret === env.API_ADMIN_SECRET);
   };
 
   app.get("/health", () => createHealth("api"));
@@ -565,6 +575,41 @@ export async function buildApp({ env, logger, scanRepository, scanQueue, apiKeyR
   );
 
   app.get(
+    "/v1/tokens/:chainId/:address/security-summary",
+    {
+      schema: {
+        description:
+          "A partner-friendly Genesis Sentinel security summary for a token's latest scan, using plain-language Yes/No/Unknown signals.",
+        tags: ["tokens"],
+        params: tokenParamsJsonSchema,
+        response: {
+          200: { description: "Plain-language token security summary.", type: "object", additionalProperties: true },
+          ...tokenNotFoundResponses
+        }
+      }
+    },
+    async (request, reply) => {
+      const parsed = tokenParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_token_request",
+          message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+        });
+      }
+
+      const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+      if (!result) {
+        return reply.code(404).send({
+          error: "scan_not_found",
+          message: "No scan has been run for this token yet."
+        });
+      }
+
+      return buildTokenSecuritySummary(result, { webAppUrl: env.WEB_PUBLIC_APP_URL });
+    }
+  );
+
+  app.get(
     "/v1/tokens/:chainId/:address/holders",
     {
       schema: {
@@ -824,7 +869,13 @@ export async function buildApp({ env, logger, scanRepository, scanQueue, apiKeyR
           required: ["name"],
           properties: {
             name: { type: "string", minLength: 1, maxLength: 100 },
-            scopes: { type: "array", items: { type: "string", enum: ["scan:read", "scan:write"] } }
+            scopes: { type: "array", items: { type: "string", enum: ["scan:read", "scan:write"] } },
+            rateLimitPerMinute: {
+              type: "integer",
+              minimum: 1,
+              maximum: 100000,
+              description: "Admin-only. Custom per-key read/global limit and scan-write limit."
+            }
           }
         },
         response: {
@@ -834,6 +885,7 @@ export async function buildApp({ env, logger, scanRepository, scanQueue, apiKeyR
             additionalProperties: true
           },
           400: { description: "Missing or invalid name/scopes.", type: "object", additionalProperties: true },
+          403: { description: "Custom scopes or limits require the admin secret.", type: "object", additionalProperties: true },
           429: { description: "Too many key-creation requests from this address.", type: "object", additionalProperties: true },
           503: { description: "API key management is not configured on this instance.", type: "object", additionalProperties: true }
         }
@@ -864,19 +916,38 @@ export async function buildApp({ env, logger, scanRepository, scanQueue, apiKeyR
       });
     }
 
+    const requestedScopes = parsed.data.scopes ?? ["scan:read"];
+    const requestedCustomLimit = parsed.data.rateLimitPerMinute;
+    const admin = isAdminRequest(request);
+    const requiresAdmin =
+      requestedScopes.some((scope) => scope !== "scan:read") || requestedCustomLimit !== undefined;
+    if (requiresAdmin && !admin) {
+      return reply.code(403).send({
+        error: "admin_required",
+        message:
+          "Custom API-key scopes or rate limits require X-Admin-Secret. Public key creation only issues scan:read keys at the default limit."
+      });
+    }
+
     const generated = generateApiKey();
     const created = await apiKeys.createApiKey({
       name: parsed.data.name,
       keyHash: generated.hash,
       prefix: generated.prefix,
-      scopes: parsed.data.scopes ?? ["scan:read"],
-      rateLimitPerMinute: 60
+      scopes: requestedScopes,
+      rateLimitPerMinute: requestedCustomLimit ?? 60
     });
     await apiKeys
       .recordAuditEvent({
         type: "api_key.created",
         subject: created.id,
-        metadata: { name: created.name, prefix: created.prefix, scopes: created.scopes }
+        metadata: {
+          name: created.name,
+          prefix: created.prefix,
+          scopes: created.scopes,
+          rateLimitPerMinute: created.rateLimitPerMinute,
+          createdBy: admin ? "admin" : "public"
+        }
       })
       .catch(() => undefined);
 
