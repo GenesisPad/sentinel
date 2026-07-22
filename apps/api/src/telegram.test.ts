@@ -563,3 +563,151 @@ describe("telegram scan helpers", () => {
     );
   });
 });
+
+describe("telegram report informativeness", () => {
+  const baseResult = (overrides: Partial<ScanResultView> = {}): ScanResultView => ({
+    scan: {
+      scanId: "scan-info",
+      chainId: 4663,
+      address: "0x0000000000000000000000000000000000000001",
+      state: "COMPLETED",
+      scannerVersion: "0.1.0-foundation",
+      submittedAt: "2026-07-22T00:00:00.000Z",
+      message: "Scan state is COMPLETED."
+    },
+    token: {
+      chainId: 4663,
+      address: "0x0000000000000000000000000000000000000001",
+      name: "Example",
+      symbol: "EXA",
+      decimals: 9,
+      totalSupply: "1000000000000000000",
+      deployerAddress: "0x00000000000000000000000000000000000000d1",
+      sourceVerified: true
+    },
+    detectorChecks: [],
+    findings: [],
+    liquidity: { status: "UNSUPPORTED", pools: [], message: "n/a" },
+    holders: {
+      status: "AVAILABLE",
+      snapshots: [
+        {
+          chainId: 4663,
+          tokenAddress: "0x0000000000000000000000000000000000000001",
+          blockNumber: "100",
+          topHolders: {},
+          concentration: { deployerPct: 12.5, deployerBalanceRaw: "125000000000000000" },
+          createdAt: "2026-07-22T00:00:00.000Z"
+        }
+      ],
+      message: "ok"
+    },
+    simulations: [],
+    risk: {
+      chainId: 4663,
+      address: "0x0000000000000000000000000000000000000001",
+      scannerVersion: "0.1.0-foundation",
+      status: "AVAILABLE",
+      level: "CRITICAL",
+      score: 100,
+      confidence: "HIGH",
+      categoryScores: [],
+      findingContributions: [],
+      unableToAssessReasons: [],
+      findingCounts: { INFO: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 1 },
+      message: "ok"
+    },
+    ...overrides
+  });
+
+  const simulation = (tool: string, result: Record<string, unknown>) => [
+    {
+      id: "sim-buy",
+      kind: "BUY" as const,
+      outcome: "PASSED" as const,
+      input: {},
+      result,
+      simulationTool: tool,
+      createdAt: "2026-07-22T00:00:00.000Z"
+    }
+  ];
+
+  it("says a honeypot verdict came from a real forked trade", () => {
+    const reply = formatTelegramResultReply(
+      baseResult({ simulations: simulation("0.1.0-ganache-fork", { isHoneypot: false }) })
+    );
+
+    expect(reply).toContain("Honeypot: 🟢 No");
+    expect(reply).toContain("forked chain");
+  });
+
+  it("does not present an unexecuted trade as a clean honeypot result", () => {
+    const reply = formatTelegramResultReply(
+      baseResult({ simulations: simulation("0.1.0-uniswap-v2-route-quote", {}) })
+    );
+
+    // Route-quote only proves a path exists in pool math; it must not read as "not a honeypot".
+    expect(reply).toContain("Unknown");
+    expect(reply).toContain("no trade was executed");
+    expect(reply).not.toContain("🟢 No");
+  });
+
+  it("leads with an unmissable warning when balances can be deleted", () => {
+    const reply = formatTelegramResultReply(
+      baseResult({
+        findings: [
+          {
+            id: "f1",
+            code: "LEDGER_BALANCE_DELETED",
+            detectorId: "ledger-integrity",
+            detectorVersion: "0.1.0",
+            title: "Token deletes holder balances without emitting Transfer events",
+            severity: "CRITICAL",
+            category: "CONTRACT_CONTROL",
+            confidence: "HIGH",
+            description: "d",
+            technicalExplanation: "t",
+            evidence: []
+          }
+        ]
+      })
+    );
+
+    expect(reply).toContain("Read this first");
+    expect(reply).toContain("Your tokens can vanish.");
+    // The alert must appear before the routine metrics, not buried under them.
+    expect(reply.indexOf("Read this first")).toBeLessThan(reply.indexOf("Deployer"));
+  });
+
+  it("reports the deployer's actual holdings, not just the address", () => {
+    const reply = formatTelegramResultReply(baseResult());
+
+    expect(reply).toContain("Deployer holds:");
+    expect(reply).toContain("12.50% of supply");
+  });
+
+  it("flags a punitive tax instead of printing it as a neutral number", () => {
+    const reply = formatTelegramResultReply(
+      baseResult({
+        simulations: simulation("0.1.0-ganache-fork", {
+          isHoneypot: false,
+          buyTaxBps: 7955,
+          sellTaxBps: 0
+        })
+      })
+    );
+
+    expect(reply).toMatch(/B 79\.5% ⚠️/u);
+    // A normal 0% sell tax should stay unmarked.
+    expect(reply).not.toMatch(/S 0\.0% ⚠️/u);
+  });
+
+  it("renders a dev cluster section with per-wallet holdings", () => {
+    const reply = formatTelegramSectionReply("cluster", baseResult());
+
+    expect(reply).toContain("Dev cluster");
+    expect(reply).toContain("deployer");
+    expect(reply).toContain("12.50%");
+    expect(reply).toContain("Burned supply is excluded");
+  });
+});

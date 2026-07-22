@@ -6,6 +6,7 @@ import type {
   TrackTelegramAddressInput
 } from "@genesis-sentinel/database";
 import {
+  buildTokenSecuritySummary,
   liquidityHealthTier,
   selectPrimaryLiquidityPool,
   type LiquidityHealthTier,
@@ -275,7 +276,7 @@ export function createTelegramBot(options: {
     await context.answerCallbackQuery();
   });
 
-  bot.callbackQuery(/^section:(holders|taxes|chart):(.+)$/u, async (context) => {
+  bot.callbackQuery(/^section:(holders|taxes|chart|cluster):(.+)$/u, async (context) => {
     const section = context.match[1];
     const scanId = resolveTelegramCallbackScanId(callbackRegistry, context.match[2]);
     if (!isTelegramResultSection(section) || !scanId) {
@@ -365,8 +366,10 @@ export function createTelegramBot(options: {
 
 function isTelegramResultSection(
   value: string | undefined
-): value is "holders" | "taxes" | "chart" {
-  return value === "holders" || value === "taxes" || value === "chart";
+): value is "holders" | "taxes" | "chart" | "cluster" {
+  return (
+    value === "holders" || value === "taxes" || value === "chart" || value === "cluster"
+  );
 }
 
 export function parseScanAddress(text: string): `0x${string}` | null {
@@ -516,17 +519,24 @@ export function formatTelegramResultReply(result: ScanResultView): string {
       ? ["*Top risks*", ...topFindings.map((f) => `${severityEmoji(f.severity)} ${escapeMarkdown(f.title)}`)].join("\n")
       : "*Top risks:* none persisted";
 
+  const summary = buildTokenSecuritySummary(result);
+
   const lines = compact([
     "*Genesis Sentinel*",
     `${escapeMarkdown(formatTokenLabel(result))} ${riskEmoji(result)} *${formatRiskLine(result)}*`,
     `\`${result.scan.address}\``,
     "",
+    // Leads the report: these mean the token can take your balance or your money regardless of
+    // how the rest of the numbers look, so they belong above the usual metrics.
+    criticalAlertBlock(result),
     honeypot ? `Honeypot: ${honeypot}` : null,
     capabilityLine(result),
     taxLine(tax),
     "",
     ownership ? `Owner: ${ownership}${ownerAddress}` : null,
     result.token.deployerAddress ? `Deployer: \`${shortenAddress(result.token.deployerAddress)}\`` : null,
+    deployerBalanceLine(summary.deployerBalance, result),
+    devClusterLine(summary.devCluster),
     sourceVerifiedLine(result),
     dexPaidLine(result),
     tokenAgeLine(result),
@@ -555,9 +565,11 @@ export function createTelegramResultKeyboard(
   fullReportUrl?: string
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard()
-    .text("Chart", `section:chart:${callbackScanId}`)
     .text("Holders", `section:holders:${callbackScanId}`)
+    .text("Dev cluster", `section:cluster:${callbackScanId}`)
     .text("Taxes", `section:taxes:${callbackScanId}`)
+    .row()
+    .text("Chart", `section:chart:${callbackScanId}`)
     .text("Refresh", `refresh:${callbackScanId}`);
   return fullReportUrl ? keyboard.row().url("Full Report", fullReportUrl) : keyboard;
 }
@@ -612,9 +624,42 @@ function resolveTelegramCallbackScanId(
 }
 
 export function formatTelegramSectionReply(
-  section: "holders" | "taxes" | "chart",
+  section: "holders" | "taxes" | "chart" | "cluster",
   result: ScanResultView
 ): string {
+  if (section === "cluster") {
+    const { devCluster } = buildTokenSecuritySummary(result);
+    if (devCluster.walletCount === 0) {
+      return "*Dev cluster*\nNo wallet has been evidenced as connected to the deployer for this token.";
+    }
+
+    const roleLabels: Record<string, string> = {
+      DEPLOYED_BY: "deployer",
+      TRANSFERRED_SUPPLY_TO: "received supply",
+      OWNED_BY: "owner",
+      PREVIOUSLY_OWNED_BY: "previous owner",
+      FUNDED_BY: "funded by",
+      SHARED_BYTECODE: "shared bytecode"
+    };
+
+    return compact([
+      "*Dev cluster*",
+      devClusterLine(devCluster),
+      "",
+      ...devCluster.wallets
+        .slice(0, 10)
+        .map(
+          (wallet) =>
+            `\`${shortenAddress(wallet.address)}\` — ${escapeMarkdown(roleLabels[wallet.role] ?? wallet.role)}: ${
+              wallet.holdingPct === null ? "not measured" : `${wallet.holdingPct.toFixed(2)}%`
+            }`
+        ),
+      devCluster.wallets.length > 10 ? `_…and ${devCluster.wallets.length - 10} more._` : null,
+      "",
+      "_Burned supply is excluded: tokens sent to a burn address cannot be sold._"
+    ]).join("\n");
+  }
+
   if (section === "holders") {
     const concentration = readHolderConcentration(result);
     return compact([
@@ -653,6 +698,98 @@ export function formatTelegramSectionReply(
     "",
     "_Chart links are not configured yet for Robinhood Chain markets._"
   ].join("\n");
+}
+
+/**
+ * Findings that change what a holder can actually do with the token, rather than describing a
+ * capability the contract merely has. Each is surfaced above the normal metrics because a token
+ * can look healthy on every other line and still be one of these.
+ */
+const criticalAlerts: { code: string; message: string }[] = [
+  {
+    code: "LEDGER_BALANCE_DELETED",
+    message: "This token has deleted holder balances with no transfer. Your tokens can vanish."
+  },
+  {
+    code: "POOL_RESERVE_DESYNC_CRITICAL",
+    message: "The pool holds far fewer tokens than it claims. Quoted liquidity is not real."
+  },
+  {
+    code: "TRANSFER_GATE_ALLOWLIST",
+    message: "Transfers run through an allowlist. Only pre-approved wallets may be able to sell."
+  },
+  {
+    code: "LEDGER_BALANCE_INFLATED",
+    message: "Balances have been created with no transfer, so supply figures cannot be trusted."
+  },
+  {
+    code: "RENOUNCED_BUT_EXTERNALLY_GATED",
+    message: "Ownership looks renounced but control remains through a hardcoded address."
+  }
+];
+
+function criticalAlertBlock(result: ScanResultView): string | null {
+  const codes = new Set(result.findings.map((finding) => finding.code));
+  const hits = criticalAlerts.filter((alert) => codes.has(alert.code));
+  if (hits.length === 0) return null;
+
+  return [
+    "⛔️ *Read this first*",
+    ...hits.map((alert) => `• ${escapeMarkdown(alert.message)}`),
+    ""
+  ].join("\n");
+}
+
+function deployerBalanceLine(
+  deployerBalance: { amountRaw: string | null; pctOfSupply: number | null } | null,
+  result: ScanResultView
+): string | null {
+  if (!deployerBalance) return null;
+  const pct = deployerBalance.pctOfSupply;
+  const amount =
+    deployerBalance.amountRaw === null
+      ? null
+      : formatTokenAmount(deployerBalance.amountRaw, result.token.decimals ?? null);
+
+  if (pct === null && amount === null) return null;
+  const parts = compact([amount, pct === null ? null : `${pct.toFixed(2)}% of supply`]);
+  return `Deployer holds: ${parts.join(" · ")}`;
+}
+
+function devClusterLine(devCluster: {
+  walletCount: number;
+  knownHoldingPct: number | null;
+  unknownHoldingWalletCount: number;
+}): string | null {
+  if (devCluster.walletCount === 0) return null;
+
+  const wallets = `${devCluster.walletCount} wallet${devCluster.walletCount === 1 ? "" : "s"}`;
+  const held =
+    devCluster.knownHoldingPct === null
+      ? "holdings unknown"
+      : `${devCluster.knownHoldingPct.toFixed(2)}% of supply`;
+  // Saying only the measured percentage would understate the cluster when some of its wallets
+  // fell outside the holder snapshot, so the gap is stated rather than hidden.
+  const gap =
+    devCluster.unknownHoldingWalletCount > 0
+      ? ` (+${devCluster.unknownHoldingWalletCount} not measured)`
+      : "";
+  return `Dev cluster: ${wallets} · ${held}${gap}`;
+}
+
+/** Raw token units are unreadable in a chat message, so this abbreviates to K/M/B. */
+function formatTokenAmount(amountRaw: string, decimals: number | null): string | null {
+  let value: number;
+  try {
+    value = Number(BigInt(amountRaw)) / 10 ** (decimals ?? 0);
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(value)) return null;
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
+  return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 function riskEmoji(result: ScanResultView): string {
@@ -745,6 +882,19 @@ function formatCapability(result: ScanResultView, kind: "BUY" | "SELL"): string 
   return "Inconclusive";
 }
 
+/**
+ * How strong the trade evidence behind a honeypot verdict is. A forked run actually executed a
+ * buy and a sell; a route quote only confirmed a path exists in pool math and cannot prove a
+ * sell would go through. Reporting the two identically is what made "can buy: yes, can sell:
+ * yes, honeypot: unknown" read as a contradiction instead of a caveat.
+ */
+function readSimulationEvidence(result: ScanResultView): "FORK" | "ROUTE_QUOTE" | "NONE" {
+  const tools = result.simulations.map((run) => run.simulationTool);
+  if (tools.some((tool) => tool.includes("fork"))) return "FORK";
+  if (tools.some((tool) => tool.includes("route-quote"))) return "ROUTE_QUOTE";
+  return "NONE";
+}
+
 function readHoneypotStatus(result: ScanResultView): string | null {
   const simulations = result.simulations;
   if (simulations.length === 0 || simulations.every((run) => run.outcome === "UNSUPPORTED")) {
@@ -754,11 +904,21 @@ function readHoneypotStatus(result: ScanResultView): string | null {
   const honeypotFlag = simulations
     .map((run) => (isRecord(run.result) ? run.result.isHoneypot : undefined))
     .find((value) => typeof value === "boolean");
+  const evidence = readSimulationEvidence(result);
 
   if (typeof honeypotFlag === "boolean") {
-    return honeypotFlag ? "Detected" : "Not detected";
+    if (honeypotFlag) {
+      return evidence === "FORK" ? "🔴 Yes — a forked sell failed" : "🔴 Yes";
+    }
+    return evidence === "FORK"
+      ? "🟢 No — a real buy and sell both executed on a forked chain"
+      : "🟢 No";
   }
 
+  // Never upgrade "we did not execute a trade" into a clean bill of health.
+  if (evidence === "ROUTE_QUOTE") {
+    return "⚪ Unknown — only pool math was checked, no trade was executed";
+  }
   return null;
 }
 
@@ -788,11 +948,24 @@ function capabilityLine(result: ScanResultView): string | null {
   return `Buy / Sell: ${buy ?? "Not proven"} / ${sell ?? "Not proven"}`;
 }
 
+/** Above this, a tax stops being a fee and starts being most of your money. */
+const punitiveTaxPct = 15;
+
+/**
+ * A measured tax is printed as a plain number, which reads as neutral even at 79%. Marking the
+ * punitive ones keeps the headline honest: the figure is the risk, and a reader skimming a chat
+ * message should not have to do the comparison themselves.
+ */
+function markPunitiveTax(value: string): string {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed >= punitiveTaxPct ? `${value} ⚠️` : value;
+}
+
 function taxLine(tax: { buy: string; sell: string; transfer: string }): string | null {
   const values = [
-    tax.buy ? `B ${tax.buy}` : null,
-    tax.sell ? `S ${tax.sell}` : null,
-    tax.transfer ? `T ${tax.transfer}` : null,
+    tax.buy ? `B ${markPunitiveTax(tax.buy)}` : null,
+    tax.sell ? `S ${markPunitiveTax(tax.sell)}` : null,
+    tax.transfer ? `T ${markPunitiveTax(tax.transfer)}` : null,
   ].filter((value): value is string => value !== null);
   return values.length > 0 ? `Tax: ${values.join(" | ")}` : null;
 }
