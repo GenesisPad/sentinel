@@ -14,7 +14,7 @@ const NAV = [
 /** /pricing and /blog never had pages behind them — replaced with real destinations in the
  * wider GenesisPad ecosystem rather than links that 404. */
 const ECOSYSTEM_NAV = [
-  { label: "GenesisPad", href: "https://genesispad.app" },
+  { label: "Main Site", href: "https://genesispad.app" },
   { label: "Launchpad", href: "https://launch.genesispad.app" },
   { label: "Locker", href: "https://locker.genesispad.app" },
   { label: "Buybot", href: "https://t.me/genesis_buybot" },
