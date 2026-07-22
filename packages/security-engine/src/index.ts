@@ -767,7 +767,7 @@ export const selectorPatternDetectors: SecurityDetector<BytecodeDetectorInput>[]
  */
 interface SourceRiskPattern {
   regex: RegExp;
-  classifyMatch?: (source: string, matchIndex: number) => { note: string } | null;
+  classifyMatch?: (source: string, matchIndex: number, matchedText: string) => { note: string } | null;
 }
 
 interface SourceRiskRule {
@@ -840,6 +840,53 @@ function classifyBurnFrom(source: string, matchIndex: number): { note: string } 
   };
 }
 
+/**
+ * Confirms the matched identifier is declared `immutable` or `constant` — Solidity's compiler
+ * forbids reassigning either outside the constructor, so a matched cooldown/anti-snipe keyword
+ * that names one is a fixed, self-expiring launch-window constant, not a knob any function
+ * (including one not covered by the setter-name pattern) can ever change post-deployment.
+ * Verified against a real false positive: PonsLauncherToken's `launchBlock`/`restrictionEndBlock`
+ * are `uint256 public immutable`, fixed forever at deploy time.
+ */
+function classifyImmutableIdentifier(source: string, _matchIndex: number, matchedText: string): { note: string } | null {
+  const idPattern = new RegExp(`\\b${escapeRegExp(matchedText)}\\b`, "g");
+  let occurrence: RegExpExecArray | null;
+  while ((occurrence = idPattern.exec(source))) {
+    const stmtStart = Math.max(source.lastIndexOf(";", occurrence.index), source.lastIndexOf("{", occurrence.index)) + 1;
+    const stmtEnd = source.indexOf(";", occurrence.index);
+    if (stmtEnd === -1) continue;
+
+    const statement = source.slice(stmtStart, stmtEnd);
+    const looksLikeDeclaration = /^\s*(?:uint\d*|int\d*|address|bool|bytes\d*|string)\b/.test(statement);
+    if (looksLikeDeclaration && /\b(?:immutable|constant)\b/.test(statement)) {
+      return {
+        note: `\`${matchedText}\` is declared immutable/constant, fixed forever at deployment — Solidity's compiler forbids any function from reassigning it afterward`
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Confirms a matched router/pair setter can only ever fire once — guarded by a check that the
+ * state variable it assigns is still unset (typically `require(x == address(0))` or an
+ * `if (x != address(0)) revert` guard). A setter that can only run once cannot be used to swap
+ * the router/pair out from under holders after launch, unlike a setter callable at any time.
+ */
+function classifyOneTimeSetterGuard(source: string, matchIndex: number): { note: string } | null {
+  const body = extractFunctionBodyAt(source, matchIndex);
+  if (!body) return null;
+
+  const hasOneTimeGuard =
+    /require\s*\(\s*\w+\s*==\s*address\s*\(\s*0\s*\)/.test(body) ||
+    /if\s*\(\s*\w+\s*!=\s*address\s*\(\s*0\s*\)\s*\)\s*revert/.test(body);
+  if (!hasOneTimeGuard) return null;
+
+  return {
+    note: "the matched setter is guarded to only succeed while the target state variable is still unset (zero address), so it can only run once and cannot replace an already-configured router/pair later"
+  };
+}
+
 const sourceRiskRules: SourceRiskRule[] = [
   {
     code: "SOURCE_BLACKLIST_CONTROL",
@@ -871,7 +918,16 @@ const sourceRiskRules: SourceRiskRule[] = [
     recommendation:
       "Review whether the cooldown is temporary/fixed or can be changed by a privileged role after launch.",
     patterns: [
-      { regex: /\b(?:cooldown|coolDown|transferDelay|antiBot|antiSnipe|sniper|launchBlock|limitsInEffect|_holderLastTransferTimestamp|lastTransferTimestamp)\b/i },
+      // The bare keyword can match either a mutable knob or a fixed, self-expiring launch-window
+      // constant (e.g. Pons: `uint256 public immutable launchBlock`) — classifyImmutableIdentifier
+      // tells them apart. Solidity's compiler forbids reassigning immutable/constant variables
+      // outside the constructor, so this is a provable guarantee, not a heuristic guess.
+      {
+        regex: /\b(?:cooldown|coolDown|transferDelay|antiBot|antiSnipe|sniper|launchBlock|limitsInEffect|_holderLastTransferTimestamp|lastTransferTimestamp)\b/i,
+        classifyMatch: classifyImmutableIdentifier
+      },
+      // A named setter function is itself the risk signal regardless of any other variable's
+      // mutability — never downgraded.
       { regex: /\bfunction\s+\w*(?:setCooldown|setTransferDelay|setAntiBot|setAntiSnipe|removeLimits)\w*\s*\(/i },
       { regex: /\bmapping\s*\([^)]*address[^)]*\)\s*(?:public|private|internal)?\s*\w*(?:cooldown|lastTransfer|lastTx)\w*/i }
     ]
@@ -1031,7 +1087,10 @@ const sourceRiskRules: SourceRiskRule[] = [
     recommendation:
       "Review who can call these setters and whether trade simulations against the currently configured router/pair remain valid after a change.",
     patterns: [
-      { regex: /\bfunction\s+\w*(?:setRouter|setPair|updateRouter|updatePair|setUniswapRouter|setDexRouter)\w*\s*\(/i }
+      {
+        regex: /\bfunction\s+\w*(?:setRouter|setPair|updateRouter|updatePair|setUniswapRouter|setDexRouter)\w*\s*\(/i,
+        classifyMatch: classifyOneTimeSetterGuard
+      }
     ]
   },
   {
@@ -2774,7 +2833,7 @@ function matchSourceRule(sourceFiles: ContractSourceFile[], rule: SourceRiskRule
     for (const { regex, classifyMatch } of rule.patterns) {
       const match = regex.exec(source);
       if (match?.index !== undefined) {
-        const classification = classifyMatch?.(source, match.index);
+        const classification = classifyMatch?.(source, match.index, match[0]);
         matches.push({
           filename: file.filename,
           pattern: regex.source,

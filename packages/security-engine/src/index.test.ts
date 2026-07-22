@@ -788,6 +788,119 @@ describe("source-code risk detector", () => {
     expect(result.findings.map((f) => f.code)).not.toContain("SOURCE_MINT_OR_SUPPLY_CONTROL");
   });
 
+  it("downgrades a cooldown/anti-snipe window built from immutable, self-expiring constants", async () => {
+    // Real-world shape (PonsLauncherToken): a launch-window restriction gated by immutable
+    // block numbers is fixed forever at deployment and expires on its own — fundamentally
+    // different from a mutable cooldown a privileged role can extend or re-enable.
+    const result = await sourceCodeRiskDetector.run(
+      {
+        status: "VERIFIED",
+        address: context.address,
+        sourceFiles: [
+          {
+            filename: "LaunchWindow.sol",
+            sourceCode: `
+              contract LaunchWindow {
+                uint256 public immutable launchBlock;
+                uint256 public immutable restrictionEndBlock;
+                constructor(uint256 restrictionBlocks) {
+                  launchBlock = block.number;
+                  restrictionEndBlock = block.number + restrictionBlocks;
+                }
+              }
+            `
+          }
+        ]
+      },
+      context
+    );
+
+    const finding = result.findings.find((f) => f.code === "SOURCE_TRADING_COOLDOWN_CONTROL");
+    expect(finding).toMatchObject({ severity: "INFO" });
+    expect(finding?.technicalExplanation).toContain("Verified benign");
+    expect(finding?.technicalExplanation).toContain("immutable");
+  });
+
+  it("does not downgrade a cooldown built from a plain mutable variable", async () => {
+    const result = await sourceCodeRiskDetector.run(
+      {
+        status: "VERIFIED",
+        address: context.address,
+        sourceFiles: [
+          {
+            filename: "MutableCooldown.sol",
+            sourceCode: `
+              contract MutableCooldown {
+                uint256 public launchBlock;
+                function setLaunchBlock(uint256 value) external onlyOwner { launchBlock = value; }
+              }
+            `
+          }
+        ]
+      },
+      context
+    );
+
+    expect(
+      result.findings.find((f) => f.code === "SOURCE_TRADING_COOLDOWN_CONTROL")
+    ).toMatchObject({ severity: "MEDIUM" });
+  });
+
+  it("downgrades a router setter guarded to only ever fire once", async () => {
+    const result = await sourceCodeRiskDetector.run(
+      {
+        status: "VERIFIED",
+        address: context.address,
+        sourceFiles: [
+          {
+            filename: "OneTimeRouter.sol",
+            sourceCode: `
+              contract OneTimeRouter {
+                address public router;
+                function setRouter(address newRouter) external onlyOwner {
+                  require(router == address(0), "already set");
+                  router = newRouter;
+                }
+              }
+            `
+          }
+        ]
+      },
+      context
+    );
+
+    const finding = result.findings.find((f) => f.code === "SOURCE_ROUTER_OR_PAIR_REPLACEMENT");
+    expect(finding).toMatchObject({ severity: "INFO" });
+    expect(finding?.technicalExplanation).toContain("Verified benign");
+  });
+
+  it("does not downgrade a router setter callable at any time", async () => {
+    const result = await sourceCodeRiskDetector.run(
+      {
+        status: "VERIFIED",
+        address: context.address,
+        sourceFiles: [
+          {
+            filename: "MutableRouter.sol",
+            sourceCode: `
+              contract MutableRouter {
+                address public router;
+                function setRouter(address newRouter) external onlyOwner {
+                  router = newRouter;
+                }
+              }
+            `
+          }
+        ]
+      },
+      context
+    );
+
+    expect(
+      result.findings.find((f) => f.code === "SOURCE_ROUTER_OR_PAIR_REPLACEMENT")
+    ).toMatchObject({ severity: "HIGH" });
+  });
+
   it("detects router/pair replacement and arbitrary low-level external calls", async () => {
     const result = await sourceCodeRiskDetector.run(
       {
