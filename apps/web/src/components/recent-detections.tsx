@@ -11,7 +11,7 @@ export function RecentDetections() {
   const { data, isLoading } = useRecentScans();
 
   return (
-    <section className="rounded-2xl border border-border bg-surface-deep p-6">
+    <section className="min-w-0 max-w-full rounded-2xl border border-border bg-surface-deep p-4 sm:p-6">
       <div className="mb-3.5 flex items-center justify-between">
         <h2 className="font-display text-xl font-semibold">Recent security detections</h2>
         <Link href="/explore" className="text-sm font-bold text-primary hover:brightness-110">

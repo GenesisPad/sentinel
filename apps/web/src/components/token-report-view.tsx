@@ -66,12 +66,12 @@ export function TokenReportView({
   const sections = view === "trader" ? TRADER_SECTIONS : TECHNICAL_SECTIONS;
 
   return (
-    <main className="mx-auto max-w-[1360px] px-5 pb-20 sm:px-7">
+    <main className="mx-auto min-w-0 max-w-[1360px] px-4 pb-20 sm:px-7">
       <Link href="/" className="mb-4 inline-flex items-center gap-2 py-1.5 text-sm font-semibold text-muted hover:text-foreground">
         <ArrowLeft className="size-4" /> Back to scanner
       </Link>
 
-      <Card className="flex flex-col justify-between gap-5 bg-[linear-gradient(180deg,#101311,#0c0e0c)] p-6 sm:flex-row sm:items-center">
+      <Card className="flex min-w-0 flex-col justify-between gap-5 bg-[linear-gradient(180deg,#101311,#0c0e0c)] p-4 sm:flex-row sm:items-center sm:p-6">
         <TokenHeader token={report.token} size="lg" />
         <div className="flex flex-col gap-2 sm:items-end">
           <div className="flex flex-wrap items-center gap-2">
@@ -117,7 +117,7 @@ export function TokenReportView({
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[220px_1fr]">
         <aside className="hidden lg:block">
-          <nav className="sticky top-5 flex flex-col gap-0.5" aria-label="Report sections">
+          <nav className="sticky top-24 flex flex-col gap-0.5" aria-label="Report sections">
             {sections.map((s) => (
               <a key={s.id} href={`#${s.id}`} className="rounded-lg px-3.5 py-2.5 text-sm font-semibold text-muted transition-colors hover:bg-surface hover:text-foreground">
                 {s.label}
@@ -285,7 +285,7 @@ function TopRisks({ report }: { report: ScanReport }) {
             style={{ borderColor: style.border, background: style.bg }}
           >
             <AlertTriangle className="mt-0.5 size-4 shrink-0" style={{ color: style.hex }} aria-hidden />
-            <span className="flex-1">
+            <span className="min-w-0 flex-1">
               <span className="block text-sm font-bold" style={{ color: style.hex }}>
                 {f.title}
               </span>
@@ -301,8 +301,8 @@ function TopRisks({ report }: { report: ScanReport }) {
 
 function Section({ id, title, subtitle, children }: { id: string; title: string; subtitle?: string; children: React.ReactNode }) {
   return (
-    <section id={id} className="scroll-mt-5">
-      <Card>
+    <section id={id} className="min-w-0 max-w-full scroll-mt-24">
+      <Card className="min-w-0 max-w-full overflow-hidden">
         <CardContent>
           <h2 className="font-display text-lg font-semibold">{title}</h2>
           {subtitle ? <p className="mb-4 mt-0.5 text-sm text-muted">{subtitle}</p> : <div className="mb-4" />}

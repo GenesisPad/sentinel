@@ -17,7 +17,7 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
     );
   }
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="flex min-w-0 max-w-full flex-col gap-2.5">
       {sortFindings(findings).map((f) => (
         <FindingCard key={f.id} finding={f} showEvidence={view === "technical"} />
       ))}

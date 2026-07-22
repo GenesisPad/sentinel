@@ -75,7 +75,6 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  overflow-x: clip;
   background-color: var(--color-background);
   background-image: radial-gradient(1200px 520px at 50% -140px, rgba(180, 241, 31, 0.07), transparent 70%);
   color: var(--color-foreground);

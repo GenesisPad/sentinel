@@ -107,7 +107,7 @@ export function ScannerHero() {
       {isHome ? (
         <div className="mt-11 flex flex-col gap-5">
           <WhatWeCheck />
-          <div className="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
+          <div className="grid min-w-0 gap-5 [&>*]:min-w-0 lg:grid-cols-[1.35fr_1fr]">
             <RecentDetections />
             <ApiCallout />
           </div>

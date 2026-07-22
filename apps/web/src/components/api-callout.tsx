@@ -3,7 +3,7 @@ import { ArrowRight, Check, Code2 } from "lucide-react";
 
 export function ApiCallout() {
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-border bg-[linear-gradient(160deg,#0f1409,#0c0e0c)] p-8">
+    <section className="relative min-w-0 max-w-full overflow-hidden rounded-2xl border border-border bg-[linear-gradient(160deg,#0f1409,#0c0e0c)] p-5 sm:p-8">
       <div className="pointer-events-none absolute -right-8 top-5 size-44 rounded-full bg-[radial-gradient(circle,rgba(180,241,31,0.16),transparent_70%)]" aria-hidden />
       <div className="relative">
         <div className="mb-4 flex size-14 items-center justify-center rounded-2xl border border-primary/25 bg-primary/10 text-primary">

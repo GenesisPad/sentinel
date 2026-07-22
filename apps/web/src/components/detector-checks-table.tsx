@@ -81,7 +81,7 @@ export function DetectorChecksTable({ checks }: { checks: DetectorCheckSummary[]
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="max-w-full overflow-x-auto overscroll-x-contain">
       <table className="w-full min-w-[520px] border-collapse text-sm">
         <thead>
           <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">

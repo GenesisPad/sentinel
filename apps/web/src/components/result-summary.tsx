@@ -120,7 +120,7 @@ export function ResultSummary({ report, onFresh, freshBusy = false }: { report: 
 
         <div className="flex flex-col gap-4">
           <Card>
-            <CardContent className="grid grid-cols-4 gap-3">
+            <CardContent className="grid grid-cols-2 gap-3 min-[420px]:grid-cols-4">
               <Count n={report.checks.critical} label="Critical" hex="#f0483e" />
               <Count n={report.checks.high} label="High" hex="#ff8a3d" />
               <Count n={report.checks.medium} label="Medium" hex="#f5a623" />

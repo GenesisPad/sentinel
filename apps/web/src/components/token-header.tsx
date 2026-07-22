@@ -40,7 +40,7 @@ export function TokenHeader({
   const showIcon = !!token.iconUrl && failedIconAddress !== token.address;
 
   return (
-    <div className={cn("flex items-center gap-4", className)}>
+    <div className={cn("flex min-w-0 max-w-full items-center gap-3 sm:gap-4", className)}>
       <div
         className={cn(
           "flex shrink-0 items-center justify-center overflow-hidden rounded-full border-2 bg-[#0e1a06]",
@@ -70,7 +70,7 @@ export function TokenHeader({
       </div>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <h1 className="font-display text-xl font-bold sm:text-2xl">
+          <h1 className="min-w-0 break-words font-display text-xl font-bold [overflow-wrap:anywhere] sm:text-2xl">
             {token.name ?? shortAddress(token.address)}
           </h1>
           {token.symbol ? <span className="font-mono text-sm text-muted">${token.symbol}</span> : null}
@@ -100,7 +100,7 @@ export function TokenHeader({
           {token.dexPaid === false ? <span className="text-faint">Dex · Not Paid</span> : null}
         </div>
         {profileFacts.length > 0 ? (
-          <p className="mt-1 text-xs text-faint">
+          <p className="mt-1 break-words text-xs text-faint [overflow-wrap:anywhere]">
             {profileFacts.join(" | ")}
           </p>
         ) : null}
