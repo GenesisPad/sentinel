@@ -287,6 +287,11 @@ async function createRobinhoodRouteTradeSimulations(input: {
     amountRaw: sellTokenAmount,
     holderSnapshot: input.holderSnapshot
   });
+  // Why the fork did or didn't run is recorded rather than swallowed. Silently discarding this
+  // hid a fork-simulator crash for every scan: honeypot and tax simply read "unknown" forever
+  // with nothing anywhere saying the simulator had failed rather than been skipped.
+  let forkStatus: "EXECUTED" | "NOT_CONFIGURED" | "UNSUPPORTED_POOL" | "FAILED" = "NOT_CONFIGURED";
+  let forkFailureReason: string | null = null;
   const forkResult = input.forkTradeSimulator
     ? await input
         .forkTradeSimulator({
@@ -303,8 +308,19 @@ async function createRobinhoodRouteTradeSimulations(input: {
           buyQuoteAmountRaw: buyQuoteAmount,
           expectedBuyTokenOutRaw: buyOutput
         })
-        .catch(() => null)
+        .catch((error: unknown) => {
+          forkFailureReason = errorMessage(error);
+          return null;
+        })
     : null;
+  if (forkResult) {
+    forkStatus = "EXECUTED";
+  } else if (forkFailureReason !== null) {
+    forkStatus = "FAILED";
+  } else if (input.forkTradeSimulator) {
+    // The simulator was wired but declined this pool (e.g. a non-native quote token).
+    forkStatus = "UNSUPPORTED_POOL";
+  }
   const common = {
     chainId: input.chainId,
     tokenAddress: input.tokenAddress,
@@ -318,6 +334,8 @@ async function createRobinhoodRouteTradeSimulations(input: {
     quoteSymbol: pool.quoteSymbol,
     quoteDecimals: pool.quoteDecimals,
     tokenDecimals: input.tokenDecimals,
+    forkStatus,
+    forkFailureReason,
     warning: forkResult
       ? "Forked buy/sell simulation executed on a local chain snapshot. Results are risk indicators, not guarantees."
       : "Route quote only. This confirms pool math and route liquidity, but does not execute a forked buy/sell and cannot prove honeypot or exact transfer tax."

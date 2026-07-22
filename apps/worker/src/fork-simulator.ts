@@ -65,6 +65,20 @@ function getV3SpotAmountOut(amountIn: bigint, sqrtPriceX96: bigint, zeroForOne: 
     : (amountIn * uniswapV3PriceQ192) / priceX192;
 }
 
+/**
+ * Formats a bigint as a JSON-RPC quantity (0x-prefixed hex).
+ *
+ * Ganache validates account balances as JSON-RPC quantities and rejects decimal strings with
+ * "Cannot wrap string value ... must be prefixed with 0x". Because that rejection happens while
+ * building the server — before the fork starts — and the caller catches fork errors, passing a
+ * decimal string made every scan fall back to route-quote with no error surfaced anywhere.
+ * Honeypot and tax then read "unknown" on every token, which looked like missing data rather
+ * than a broken simulator.
+ */
+export function toJsonRpcQuantity(value: bigint): `0x${string}` {
+  return `0x${value.toString(16)}`;
+}
+
 export function createGanacheForkTradeSimulator(env: AppEnv): ForkTradeSimulator | undefined {
   if (!env.SIMULATION_FORK_ENABLED || !env.ROBINHOOD_RPC_URL) {
     return undefined;
@@ -96,7 +110,7 @@ async function runGanacheForkTradeSimulation(
       blockNumber: Number(input.blockNumber)
     },
     wallet: {
-      accounts: [{ secretKey: forkPrivateKey, balance: forkNativeBalance.toString() }]
+      accounts: [{ secretKey: forkPrivateKey, balance: toJsonRpcQuantity(forkNativeBalance) }]
     },
     miner: {
       blockGasLimit: 30_000_000n
