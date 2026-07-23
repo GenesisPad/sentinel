@@ -1,17 +1,15 @@
 import { createHash } from "node:crypto";
 import type { ScanRepository } from "@genesis-sentinel/database";
+import type { ScanRequestSource } from "@genesis-sentinel/database";
 import type { ScanQueue } from "@genesis-sentinel/queue";
-import {
-  createScanId,
-  normalizeEvmAddress,
-  type ScanProgress
-} from "@genesis-sentinel/shared";
+import { createScanId, normalizeEvmAddress, type ScanProgress } from "@genesis-sentinel/shared";
 
 export interface SubmitScanInput {
   chainId: 4663;
   address: `0x${string}`;
   idempotencyKey: string;
   requestedBy?: string;
+  source?: ScanRequestSource;
 }
 
 export interface SubmitScanResult {
@@ -41,6 +39,9 @@ export async function submitScanRequest(
   }
 
   const repositoryResult = await dependencies.scans.createOrGetQueuedScan(createInput);
+  await dependencies.scans
+    .recordScanRequest?.(repositoryResult.scan.scanId, input.source ?? "API")
+    .catch(() => undefined);
 
   if (repositoryResult.created) {
     await dependencies.queue.enqueueScan({

@@ -5,6 +5,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import Fastify from "fastify";
 import { createHmac } from "node:crypto";
 import { z } from "zod";
+import { createRobinhoodChainAdapter } from "@genesis-sentinel/chain-adapters";
 import type { AppEnv } from "@genesis-sentinel/config";
 import {
   checkPostgres,
@@ -41,6 +42,7 @@ import { submitScanRequest } from "./scan-service.js";
 import {
   createTelegramBot,
   createTelegramScanLimiter,
+  TELEGRAM_BOT_COMMANDS,
   type TelegramGetAdminAnalytics,
   type TelegramListTrackedAddresses,
   type TelegramRecordActivity,
@@ -82,7 +84,10 @@ const recentScansQuerySchema = z.object({
 
 const createApiKeySchema = z.object({
   name: z.string().trim().min(1).max(100),
-  scopes: z.array(z.enum(["scan:read", "scan:write"])).nonempty().optional(),
+  scopes: z
+    .array(z.enum(["scan:read", "scan:write"]))
+    .nonempty()
+    .optional(),
   rateLimitPerMinute: z.coerce.number().int().min(1).max(100_000).optional()
 });
 
@@ -152,7 +157,11 @@ export async function buildApp({
           totalScans,
           completedScans,
           failedScans,
+          scanRequests,
+          telegramActivityCount,
+          webActivityCount,
           activities,
+          webActivityEvents,
           scansForChart,
           registrations
         ] = await Promise.all([
@@ -162,7 +171,18 @@ export async function buildApp({
           prisma.scan.count(),
           prisma.scan.count({ where: { state: { in: ["COMPLETED", "PARTIALLY_COMPLETED"] } } }),
           prisma.scan.count({ where: { state: "FAILED" } }),
+          prisma.scanRequest.groupBy({
+            by: ["source"],
+            _count: { _all: true }
+          }),
+          prisma.telegramActivity.count(),
+          prisma.webActivity.count(),
           prisma.telegramActivity.findMany({
+            select: { createdAt: true },
+            orderBy: { createdAt: "asc" },
+            take: 100_000
+          }),
+          prisma.webActivity.findMany({
             select: { createdAt: true },
             orderBy: { createdAt: "asc" },
             take: 100_000
@@ -178,6 +198,13 @@ export async function buildApp({
             take: 100_000
           })
         ]);
+        const sourceCount = (source: "WEB" | "TELEGRAM" | "API") =>
+          scanRequests.find((item) => item.source === source)?._count._all ?? 0;
+        const scanEventsBySource = await prisma.scanRequest.findMany({
+          select: { source: true, createdAt: true },
+          orderBy: { createdAt: "asc" },
+          take: 100_000
+        });
         return {
           generatedAt: new Date(),
           users,
@@ -186,8 +213,23 @@ export async function buildApp({
           totalScans,
           completedScans,
           failedScans,
+          webScans: sourceCount("WEB"),
+          telegramScans: sourceCount("TELEGRAM"),
+          apiScans: sourceCount("API"),
+          webActivities: webActivityCount,
+          telegramActivities: telegramActivityCount,
           activities: activities.map((event) => ({ at: event.createdAt })),
+          webActivityEvents: webActivityEvents.map((event) => ({ at: event.createdAt })),
           scans: scansForChart.map((event) => ({ at: event.queuedAt })),
+          webScanEvents: scanEventsBySource
+            .filter((event) => event.source === "WEB")
+            .map((event) => ({ at: event.createdAt })),
+          telegramScanEvents: scanEventsBySource
+            .filter((event) => event.source === "TELEGRAM")
+            .map((event) => ({ at: event.createdAt })),
+          apiScanEvents: scanEventsBySource
+            .filter((event) => event.source === "API")
+            .map((event) => ({ at: event.createdAt })),
           registrations: registrations.map((event) => ({ at: event.createdAt }))
         };
       }
@@ -223,7 +265,14 @@ export async function buildApp({
   await app.register(cors, {
     origin: corsOrigin,
     methods: ["GET", "POST", "DELETE"],
-    allowedHeaders: ["content-type", "authorization", "x-api-key", "x-admin-secret", "idempotency-key"]
+    allowedHeaders: [
+      "content-type",
+      "authorization",
+      "x-api-key",
+      "x-admin-secret",
+      "idempotency-key",
+      "x-sentinel-client"
+    ]
   });
 
   await app.register(rateLimit, {
@@ -309,6 +358,9 @@ export async function buildApp({
     const result = await submitScanRequest(input, { scans, queue });
     return result.scan;
   };
+  const telegramChainAdapter = env.TELEGRAM_BOT_TOKEN
+    ? createRobinhoodChainAdapter(env, { allowPublicDefault: true })
+    : null;
 
   const telegramBot = env.TELEGRAM_BOT_TOKEN
     ? createTelegramBot({
@@ -322,11 +374,19 @@ export async function buildApp({
           return result ? refreshVolatileFields(result) : null;
         },
         adminIds: env.TELEGRAM_ADMIN_IDS,
+        isTokenContract: async (address) => {
+          if (!telegramChainAdapter) return false;
+          const bytecode = await telegramChainAdapter.getBytecode({ address });
+          if (bytecode === "0x") return false;
+          const metadata = await telegramChainAdapter.getTokenMetadata(address);
+          return metadata.name !== null || metadata.symbol !== null || metadata.decimals !== null;
+        },
         ...(recordTelegramActivity ? { recordActivity: recordTelegramActivity } : {}),
         ...(getTelegramAdminAnalytics ? { getAdminAnalytics: getTelegramAdminAnalytics } : {}),
         ...(telegramTracking
           ? {
-              trackAddress: ((input) => telegramTracking.trackAddress(input)) satisfies TelegramTrackAddress,
+              trackAddress: ((input) =>
+                telegramTracking.trackAddress(input)) satisfies TelegramTrackAddress,
               untrackAddress: ((input) =>
                 telegramTracking.untrackAddress(input)) satisfies TelegramUntrackAddress,
               listTrackedAddresses: ((chat) =>
@@ -352,7 +412,10 @@ export async function buildApp({
       return;
     }
 
-    telegramBotInit ??= telegramBot.init();
+    telegramBotInit ??= (async () => {
+      await telegramBot.init();
+      await telegramBot.api.setMyCommands([...TELEGRAM_BOT_COMMANDS]);
+    })();
     await telegramBotInit;
   };
 
@@ -361,6 +424,10 @@ export async function buildApp({
     const secret = Array.isArray(presented) ? presented[0] : presented;
     return Boolean(env.API_ADMIN_SECRET && secret === env.API_ADMIN_SECRET);
   };
+
+  if (env.NODE_ENV !== "test") {
+    app.addHook("onReady", ensureTelegramBotInitialized);
+  }
 
   app.get("/health", () => createHealth("api"));
 
@@ -400,61 +467,83 @@ export async function buildApp({
           }
         },
         response: {
-          200: { description: "An existing scan was resolved (not newly queued).", type: "object", additionalProperties: true },
-          202: { description: "A new scan was queued.", type: "object", additionalProperties: true },
-          400: { description: "Invalid chain ID or address.", type: "object", additionalProperties: true },
-          403: { description: "The presented API key lacks the scan:write scope.", type: "object", additionalProperties: true },
-          429: { description: "Rate limit exceeded (per-key, or anonymous by IP).", type: "object", additionalProperties: true }
+          200: {
+            description: "An existing scan was resolved (not newly queued).",
+            type: "object",
+            additionalProperties: true
+          },
+          202: {
+            description: "A new scan was queued.",
+            type: "object",
+            additionalProperties: true
+          },
+          400: {
+            description: "Invalid chain ID or address.",
+            type: "object",
+            additionalProperties: true
+          },
+          403: {
+            description: "The presented API key lacks the scan:write scope.",
+            type: "object",
+            additionalProperties: true
+          },
+          429: {
+            description: "Rate limit exceeded (per-key, or anonymous by IP).",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
     async (request, reply) => {
-    // Scope check: only applies to authenticated requests. Anonymous requests may still create
-    // scans (subject to the stricter anonymous rate limit below) — a presented key just has to
-    // actually be authorized for scan:write, not merely valid.
-    if (request.apiKey && !request.apiKey.scopes.includes("scan:write")) {
-      return reply.code(403).send({
-        error: "insufficient_scope",
-        message: "This API key does not have the scan:write scope required to create scans."
-      });
-    }
-
-    const rateLimitKey = request.apiKey?.id ?? `anon:${request.ip}`;
-    const rateLimitMax = request.apiKey?.rateLimitPerMinute ?? ANONYMOUS_SCAN_RATE_LIMIT_PER_MINUTE;
-    const rateLimitResult = scanRateLimiter.check(rateLimitKey, rateLimitMax);
-    if (!rateLimitResult.allowed) {
-      return reply
-        .code(429)
-        .header("retry-after", rateLimitResult.retryAfterSeconds ?? 60)
-        .send({
-          error: "rate_limited",
-          message: request.apiKey
-            ? "This API key has exceeded its configured scan rate limit."
-            : "Anonymous scan requests are rate-limited. Create an API key for a higher limit.",
-          retryAfterSeconds: rateLimitResult.retryAfterSeconds
+      // Scope check: only applies to authenticated requests. Anonymous requests may still create
+      // scans (subject to the stricter anonymous rate limit below) — a presented key just has to
+      // actually be authorized for scan:write, not merely valid.
+      if (request.apiKey && !request.apiKey.scopes.includes("scan:write")) {
+        return reply.code(403).send({
+          error: "insufficient_scope",
+          message: "This API key does not have the scan:write scope required to create scans."
         });
-    }
+      }
 
-    const parsed = createScanSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "invalid_scan_request",
-        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
-      });
-    }
+      const rateLimitKey = request.apiKey?.id ?? `anon:${request.ip}`;
+      const rateLimitMax =
+        request.apiKey?.rateLimitPerMinute ?? ANONYMOUS_SCAN_RATE_LIMIT_PER_MINUTE;
+      const rateLimitResult = scanRateLimiter.check(rateLimitKey, rateLimitMax);
+      if (!rateLimitResult.allowed) {
+        return reply
+          .code(429)
+          .header("retry-after", rateLimitResult.retryAfterSeconds ?? 60)
+          .send({
+            error: "rate_limited",
+            message: request.apiKey
+              ? "This API key has exceeded its configured scan rate limit."
+              : "Anonymous scan requests are rate-limited. Create an API key for a higher limit.",
+            retryAfterSeconds: rateLimitResult.retryAfterSeconds
+          });
+      }
 
-    const result = await submitScanRequest(
-      {
-        chainId: parsed.data.chainId,
-        address: normalizeEvmAddress(parsed.data.address),
-        idempotencyKey:
-          request.headers["idempotency-key"]?.toString() ??
-          `${parsed.data.chainId}:${parsed.data.address.toLowerCase()}`
-      },
-      { scans, queue }
-    );
+      const parsed = createScanSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_scan_request",
+          message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+        });
+      }
 
-    return reply.code(result.created ? 202 : 200).send(result.scan);
+      const result = await submitScanRequest(
+        {
+          chainId: parsed.data.chainId,
+          address: normalizeEvmAddress(parsed.data.address),
+          idempotencyKey:
+            request.headers["idempotency-key"]?.toString() ??
+            `${parsed.data.chainId}:${parsed.data.address.toLowerCase()}`,
+          source: request.headers["x-sentinel-client"] === "web" ? "WEB" : "API"
+        },
+        { scans, queue }
+      );
+
+      return reply.code(result.created ? 202 : 200).send(result.scan);
     }
   );
 
@@ -462,14 +551,19 @@ export async function buildApp({
     "/v1/scans/recent",
     {
       schema: {
-        description: "The public \"recent detections\" feed — most recent scan per token, newest first.",
+        description:
+          'The public "recent detections" feed — most recent scan per token, newest first.',
         tags: ["scans"],
         querystring: {
           type: "object",
           properties: { limit: { type: "integer", minimum: 1, maximum: 50, default: 20 } }
         },
         response: {
-          200: { description: "Recent scans, newest first.", type: "object", additionalProperties: true }
+          200: {
+            description: "Recent scans, newest first.",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
@@ -482,7 +576,12 @@ export async function buildApp({
 
   app.get("/v1/analytics", async (_request, reply) => {
     if (!scans.getPublicAnalytics) {
-      return reply.code(503).send({ error: "analytics_unavailable", message: "Analytics are temporarily unavailable." });
+      return reply
+        .code(503)
+        .send({
+          error: "analytics_unavailable",
+          message: "Analytics are temporarily unavailable."
+        });
     }
     reply.header("cache-control", "public, max-age=60, stale-while-revalidate=300");
     return scans.getPublicAnalytics();
@@ -498,24 +597,33 @@ export async function buildApp({
     "/v1/scans/:scanId",
     {
       schema: {
-        description: "Poll a scan's current lifecycle state and stage progress. Full fallback for clients not using the SSE events endpoint.",
+        description:
+          "Poll a scan's current lifecycle state and stage progress. Full fallback for clients not using the SSE events endpoint.",
         tags: ["scans"],
         response: {
-          200: { description: "The scan's current state.", type: "object", additionalProperties: true },
-          404: { description: "No scan exists for that scan ID.", type: "object", additionalProperties: true }
+          200: {
+            description: "The scan's current state.",
+            type: "object",
+            additionalProperties: true
+          },
+          404: {
+            description: "No scan exists for that scan ID.",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
     async (request, reply) => {
-    const scanId = (request.params as { scanId?: string }).scanId;
-    const scan = scanId ? await scans.getScan(scanId) : undefined;
+      const scanId = (request.params as { scanId?: string }).scanId;
+      const scan = scanId ? await scans.getScan(scanId) : undefined;
 
-    if (!scan) {
-      return reply.code(404).send({
-        error: "scan_not_found",
-        message: "No scan exists for that foundation scan ID."
-      });
-    }
+      if (!scan) {
+        return reply.code(404).send({
+          error: "scan_not_found",
+          message: "No scan exists for that foundation scan ID."
+        });
+      }
 
       return scan;
     }
@@ -525,24 +633,33 @@ export async function buildApp({
     "/v1/scans/:scanId/result",
     {
       schema: {
-        description: "The persisted scan result: findings, liquidity, holders, simulations, and risk, whatever the scan has reached so far.",
+        description:
+          "The persisted scan result: findings, liquidity, holders, simulations, and risk, whatever the scan has reached so far.",
         tags: ["scans"],
         response: {
-          200: { description: "The scan's persisted result.", type: "object", additionalProperties: true },
-          404: { description: "No scan result exists for that scan ID.", type: "object", additionalProperties: true }
+          200: {
+            description: "The scan's persisted result.",
+            type: "object",
+            additionalProperties: true
+          },
+          404: {
+            description: "No scan result exists for that scan ID.",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
     async (request, reply) => {
-    const scanId = (request.params as { scanId?: string }).scanId;
-    const scan = scanId ? await scans.getScanResult(scanId) : undefined;
+      const scanId = (request.params as { scanId?: string }).scanId;
+      const scan = scanId ? await scans.getScanResult(scanId) : undefined;
 
-    if (!scan) {
-      return reply.code(404).send({
-        error: "scan_not_found",
-        message: "No scan result exists for that scan ID."
-      });
-    }
+      if (!scan) {
+        return reply.code(404).send({
+          error: "scan_not_found",
+          message: "No scan result exists for that scan ID."
+        });
+      }
 
       return scan;
     }
@@ -564,71 +681,75 @@ export async function buildApp({
         tags: ["scans"],
         produces: ["text/event-stream"],
         response: {
-          404: { description: "No scan exists for that scan ID.", type: "object", additionalProperties: true }
+          404: {
+            description: "No scan exists for that scan ID.",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
     async (request, reply) => {
-    const scanId = (request.params as { scanId?: string }).scanId;
-    const initial = scanId ? await scans.getScan(scanId) : undefined;
-    if (!scanId || !initial) {
-      return reply.code(404).send({
-        error: "scan_not_found",
-        message: "No scan exists for that foundation scan ID."
+      const scanId = (request.params as { scanId?: string }).scanId;
+      const initial = scanId ? await scans.getScan(scanId) : undefined;
+      if (!scanId || !initial) {
+        return reply.code(404).send({
+          error: "scan_not_found",
+          message: "No scan exists for that foundation scan ID."
+        });
+      }
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive"
       });
-    }
 
-    reply.hijack();
-    reply.raw.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive"
-    });
+      const send = (type: ScanEventType, data: Record<string, unknown>) => {
+        const event: ScanEvent = { type, scanId, data, emittedAt: new Date().toISOString() };
+        reply.raw.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+      };
 
-    const send = (type: ScanEventType, data: Record<string, unknown>) => {
-      const event: ScanEvent = { type, scanId, data, emittedAt: new Date().toISOString() };
-      reply.raw.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
-    };
+      const terminalStates = new Set<ScanState>(["COMPLETED", "PARTIALLY_COMPLETED", "FAILED"]);
+      let lastState: ScanState | null = null;
 
-    const terminalStates = new Set<ScanState>(["COMPLETED", "PARTIALLY_COMPLETED", "FAILED"]);
-    let lastState: ScanState | null = null;
+      const emitTransition = (state: ScanState) => {
+        if (lastState === null) {
+          send(state === "QUEUED" ? "scan.queued" : "scan.stage.started", { state });
+        } else {
+          if (lastState === "QUEUED") send("scan.started", { state });
+          send("scan.stage.completed", { state: lastState });
+          if (!terminalStates.has(state)) send("scan.stage.started", { state });
+        }
 
-    const emitTransition = (state: ScanState) => {
-      if (lastState === null) {
-        send(state === "QUEUED" ? "scan.queued" : "scan.stage.started", { state });
-      } else {
-        if (lastState === "QUEUED") send("scan.started", { state });
-        send("scan.stage.completed", { state: lastState });
-        if (!terminalStates.has(state)) send("scan.stage.started", { state });
-      }
+        if (state === "COMPLETED") send("scan.completed", { state });
+        else if (state === "PARTIALLY_COMPLETED") send("scan.partial", { state });
+        else if (state === "FAILED") send("scan.failed", { state });
 
-      if (state === "COMPLETED") send("scan.completed", { state });
-      else if (state === "PARTIALLY_COMPLETED") send("scan.partial", { state });
-      else if (state === "FAILED") send("scan.failed", { state });
+        lastState = state;
+      };
 
-      lastState = state;
-    };
-
-    let closed = false;
-    request.raw.on("close", () => {
-      closed = true;
-      clearInterval(interval);
-    });
-
-    emitTransition(initial.state);
-    const poll = async () => {
-      if (closed) return;
-      const scan = await scans.getScan(scanId).catch(() => null);
-      if (!scan) return;
-      if (scan.state !== lastState) emitTransition(scan.state);
-      if (terminalStates.has(scan.state)) {
+      let closed = false;
+      request.raw.on("close", () => {
+        closed = true;
         clearInterval(interval);
-        reply.raw.end();
-      }
-    };
-    const interval = setInterval(() => {
-      void poll();
-    }, 1_500);
+      });
+
+      emitTransition(initial.state);
+      const poll = async () => {
+        if (closed) return;
+        const scan = await scans.getScan(scanId).catch(() => null);
+        if (!scan) return;
+        if (scan.state !== lastState) emitTransition(scan.state);
+        if (terminalStates.has(scan.state)) {
+          clearInterval(interval);
+          reply.raw.end();
+        }
+      };
+      const interval = setInterval(() => {
+        void poll();
+      }, 1_500);
 
       if (terminalStates.has(initial.state)) {
         clearInterval(interval);
@@ -646,36 +767,52 @@ export async function buildApp({
     }
   } as const;
   const tokenNotFoundResponses = {
-    400: { description: "Invalid chain ID or address.", type: "object", additionalProperties: true },
-    404: { description: "No scan has been run for this token yet.", type: "object", additionalProperties: true }
+    400: {
+      description: "Invalid chain ID or address.",
+      type: "object",
+      additionalProperties: true
+    },
+    404: {
+      description: "No scan has been run for this token yet.",
+      type: "object",
+      additionalProperties: true
+    }
   } as const;
 
   app.get(
     "/v1/tokens/:chainId/:address",
     {
       schema: {
-        description: "A token's latest persisted scan result: findings, liquidity, holders, simulations, and risk.",
+        description:
+          "A token's latest persisted scan result: findings, liquidity, holders, simulations, and risk.",
         tags: ["tokens"],
         params: tokenParamsJsonSchema,
-        response: { 200: { description: "The token's latest scan result.", type: "object", additionalProperties: true }, ...tokenNotFoundResponses }
+        response: {
+          200: {
+            description: "The token's latest scan result.",
+            type: "object",
+            additionalProperties: true
+          },
+          ...tokenNotFoundResponses
+        }
       }
     },
     async (request, reply) => {
-    const parsed = tokenParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "invalid_token_request",
-        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
-      });
-    }
+      const parsed = tokenParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_token_request",
+          message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+        });
+      }
 
-    const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
-    if (!result) {
-      return reply.code(404).send({
-        error: "scan_not_found",
-        message: "No scan has been run for this token yet."
-      });
-    }
+      const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+      if (!result) {
+        return reply.code(404).send({
+          error: "scan_not_found",
+          message: "No scan has been run for this token yet."
+        });
+      }
 
       return refreshVolatileFields(result);
     }
@@ -685,28 +822,32 @@ export async function buildApp({
     "/v1/tokens/:chainId/:address/liquidity",
     {
       schema: {
-        description: "The liquidity-discovery slice of a token's latest scan: discovered pools, reserves, and lock/burn status.",
+        description:
+          "The liquidity-discovery slice of a token's latest scan: discovered pools, reserves, and lock/burn status.",
         tags: ["tokens"],
         params: tokenParamsJsonSchema,
-        response: { 200: { description: "Liquidity summary.", type: "object", additionalProperties: true }, ...tokenNotFoundResponses }
+        response: {
+          200: { description: "Liquidity summary.", type: "object", additionalProperties: true },
+          ...tokenNotFoundResponses
+        }
       }
     },
     async (request, reply) => {
-    const parsed = tokenParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "invalid_token_request",
-        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
-      });
-    }
+      const parsed = tokenParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_token_request",
+          message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+        });
+      }
 
-    const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
-    if (!result) {
-      return reply.code(404).send({
-        error: "scan_not_found",
-        message: "No scan has been run for this token yet."
-      });
-    }
+      const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+      if (!result) {
+        return reply.code(404).send({
+          error: "scan_not_found",
+          message: "No scan has been run for this token yet."
+        });
+      }
 
       return (await refreshVolatileFields(result)).liquidity;
     }
@@ -721,7 +862,11 @@ export async function buildApp({
         tags: ["tokens"],
         params: tokenParamsJsonSchema,
         response: {
-          200: { description: "Plain-language token security summary.", type: "object", additionalProperties: true },
+          200: {
+            description: "Plain-language token security summary.",
+            type: "object",
+            additionalProperties: true
+          },
           ...tokenNotFoundResponses
         }
       }
@@ -751,28 +896,36 @@ export async function buildApp({
     "/v1/tokens/:chainId/:address/holders",
     {
       schema: {
-        description: "The holder-concentration slice of a token's latest scan: top-holder percentages and related-wallet clustering.",
+        description:
+          "The holder-concentration slice of a token's latest scan: top-holder percentages and related-wallet clustering.",
         tags: ["tokens"],
         params: tokenParamsJsonSchema,
-        response: { 200: { description: "Holder concentration summary.", type: "object", additionalProperties: true }, ...tokenNotFoundResponses }
+        response: {
+          200: {
+            description: "Holder concentration summary.",
+            type: "object",
+            additionalProperties: true
+          },
+          ...tokenNotFoundResponses
+        }
       }
     },
     async (request, reply) => {
-    const parsed = tokenParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "invalid_token_request",
-        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
-      });
-    }
+      const parsed = tokenParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_token_request",
+          message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+        });
+      }
 
-    const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
-    if (!result) {
-      return reply.code(404).send({
-        error: "scan_not_found",
-        message: "No scan has been run for this token yet."
-      });
-    }
+      const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+      if (!result) {
+        return reply.code(404).send({
+          error: "scan_not_found",
+          message: "No scan has been run for this token yet."
+        });
+      }
 
       return result.holders;
     }
@@ -788,39 +941,47 @@ export async function buildApp({
         tags: ["tokens"],
         params: tokenParamsJsonSchema,
         response: {
-          200: { description: "Deployer address and history.", type: "object", additionalProperties: true },
+          200: {
+            description: "Deployer address and history.",
+            type: "object",
+            additionalProperties: true
+          },
           ...tokenNotFoundResponses,
-          404: { description: "No scan, or no deployer address resolved yet, for this token.", type: "object", additionalProperties: true }
+          404: {
+            description: "No scan, or no deployer address resolved yet, for this token.",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
     async (request, reply) => {
-    const parsed = tokenParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "invalid_token_request",
-        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
-      });
-    }
+      const parsed = tokenParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_token_request",
+          message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+        });
+      }
 
-    const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
-    if (!result) {
-      return reply.code(404).send({
-        error: "scan_not_found",
-        message: "No scan has been run for this token yet."
-      });
-    }
+      const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+      if (!result) {
+        return reply.code(404).send({
+          error: "scan_not_found",
+          message: "No scan has been run for this token yet."
+        });
+      }
 
-    if (!result.token.deployerAddress) {
-      return reply.code(404).send({
-        error: "deployer_not_found",
-        message: "No deployer address has been resolved for this token yet."
-      });
-    }
+      if (!result.token.deployerAddress) {
+        return reply.code(404).send({
+          error: "deployer_not_found",
+          message: "No deployer address has been resolved for this token yet."
+        });
+      }
 
-    const history = await scans
-      .getDeployerHistory(parsed.data.chainId, result.token.deployerAddress, parsed.data.address)
-      .catch(() => null);
+      const history = await scans
+        .getDeployerHistory(parsed.data.chainId, result.token.deployerAddress, parsed.data.address)
+        .catch(() => null);
 
       return {
         chainId: parsed.data.chainId,
@@ -838,25 +999,28 @@ export async function buildApp({
         description: "The buy/sell/transfer trade-simulation results from a token's latest scan.",
         tags: ["tokens"],
         params: tokenParamsJsonSchema,
-        response: { 200: { description: "Simulation runs.", type: "object", additionalProperties: true }, ...tokenNotFoundResponses }
+        response: {
+          200: { description: "Simulation runs.", type: "object", additionalProperties: true },
+          ...tokenNotFoundResponses
+        }
       }
     },
     async (request, reply) => {
-    const parsed = tokenParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "invalid_token_request",
-        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
-      });
-    }
+      const parsed = tokenParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_token_request",
+          message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+        });
+      }
 
-    const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
-    if (!result) {
-      return reply.code(404).send({
-        error: "scan_not_found",
-        message: "No scan has been run for this token yet."
-      });
-    }
+      const result = await scans.getLatestScanResult(parsed.data.chainId, parsed.data.address);
+      if (!result) {
+        return reply.code(404).send({
+          error: "scan_not_found",
+          message: "No scan has been run for this token yet."
+        });
+      }
 
       return { simulations: result.simulations };
     }
@@ -866,23 +1030,28 @@ export async function buildApp({
     "/v1/tokens/:chainId/:address/findings",
     {
       schema: {
-        description: "All persisted security findings for a token's latest scan, most serious first.",
+        description:
+          "All persisted security findings for a token's latest scan, most serious first.",
         tags: ["tokens"],
         params: tokenParamsJsonSchema,
         response: {
           200: { description: "Findings list.", type: "object", additionalProperties: true },
-          400: { description: "Invalid chain ID or address.", type: "object", additionalProperties: true }
+          400: {
+            description: "Invalid chain ID or address.",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
     async (request, reply) => {
-    const parsed = tokenParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "invalid_token_request",
-        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
-      });
-    }
+      const parsed = tokenParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_token_request",
+          message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+        });
+      }
 
       return {
         chainId: parsed.data.chainId,
@@ -970,20 +1139,20 @@ export async function buildApp({
     },
     async (request, reply) => {
       const parsed = tokenParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "invalid_risk_request",
-        message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
-      });
-    }
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_risk_request",
+          message: "Provide Robinhood Chain ID 4663 and a valid EVM contract address."
+        });
+      }
 
-    const risk = await scans.getRiskSnapshot(parsed.data.chainId, parsed.data.address);
-    if (!risk) {
-      return reply.code(404).send({
-        error: "risk_not_found",
-        message: "No scan exists for that token address yet."
-      });
-    }
+      const risk = await scans.getRiskSnapshot(parsed.data.chainId, parsed.data.address);
+      if (!risk) {
+        return reply.code(404).send({
+          error: "risk_not_found",
+          message: "No scan exists for that token address yet."
+        });
+      }
 
       return risk;
     }
@@ -1018,76 +1187,97 @@ export async function buildApp({
         },
         response: {
           201: {
-            description: "The created key, including the plaintext `key` field (shown only this once).",
+            description:
+              "The created key, including the plaintext `key` field (shown only this once).",
             type: "object",
             additionalProperties: true
           },
-          400: { description: "Missing or invalid name/scopes.", type: "object", additionalProperties: true },
-          403: { description: "Custom scopes or limits require the admin secret.", type: "object", additionalProperties: true },
-          429: { description: "Too many key-creation requests from this address.", type: "object", additionalProperties: true },
-          503: { description: "API key management is not configured on this instance.", type: "object", additionalProperties: true }
+          400: {
+            description: "Missing or invalid name/scopes.",
+            type: "object",
+            additionalProperties: true
+          },
+          403: {
+            description: "Custom scopes or limits require the admin secret.",
+            type: "object",
+            additionalProperties: true
+          },
+          429: {
+            description: "Too many key-creation requests from this address.",
+            type: "object",
+            additionalProperties: true
+          },
+          503: {
+            description: "API key management is not configured on this instance.",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
     async (request, reply) => {
-    if (!apiKeys) {
-      return reply.code(503).send({
-        error: "api_keys_not_configured",
-        message: "API key management is not available on this instance."
-      });
-    }
+      if (!apiKeys) {
+        return reply.code(503).send({
+          error: "api_keys_not_configured",
+          message: "API key management is not available on this instance."
+        });
+      }
 
-    const rateLimitResult = scanRateLimiter.check(`anon:${request.ip}`, ANONYMOUS_SCAN_RATE_LIMIT_PER_MINUTE);
-    if (!rateLimitResult.allowed) {
-      return reply.code(429).send({
-        error: "rate_limited",
-        message: "Too many API key creation requests from this address.",
-        retryAfterSeconds: rateLimitResult.retryAfterSeconds
-      });
-    }
+      const rateLimitResult = scanRateLimiter.check(
+        `anon:${request.ip}`,
+        ANONYMOUS_SCAN_RATE_LIMIT_PER_MINUTE
+      );
+      if (!rateLimitResult.allowed) {
+        return reply.code(429).send({
+          error: "rate_limited",
+          message: "Too many API key creation requests from this address.",
+          retryAfterSeconds: rateLimitResult.retryAfterSeconds
+        });
+      }
 
-    const parsed = createApiKeySchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "invalid_api_key_request",
-        message: "Provide a name (1-100 characters) and optionally a list of scopes."
-      });
-    }
+      const parsed = createApiKeySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_api_key_request",
+          message: "Provide a name (1-100 characters) and optionally a list of scopes."
+        });
+      }
 
-    const requestedScopes = parsed.data.scopes ?? ["scan:read"];
-    const requestedCustomLimit = parsed.data.rateLimitPerMinute;
-    const admin = isAdminRequest(request);
-    const requiresAdmin =
-      requestedScopes.some((scope) => scope !== "scan:read") || requestedCustomLimit !== undefined;
-    if (requiresAdmin && !admin) {
-      return reply.code(403).send({
-        error: "admin_required",
-        message:
-          "Custom API-key scopes or rate limits require X-Admin-Secret. Public key creation only issues scan:read keys at the default limit."
-      });
-    }
+      const requestedScopes = parsed.data.scopes ?? ["scan:read"];
+      const requestedCustomLimit = parsed.data.rateLimitPerMinute;
+      const admin = isAdminRequest(request);
+      const requiresAdmin =
+        requestedScopes.some((scope) => scope !== "scan:read") ||
+        requestedCustomLimit !== undefined;
+      if (requiresAdmin && !admin) {
+        return reply.code(403).send({
+          error: "admin_required",
+          message:
+            "Custom API-key scopes or rate limits require X-Admin-Secret. Public key creation only issues scan:read keys at the default limit."
+        });
+      }
 
-    const generated = generateApiKey();
-    const created = await apiKeys.createApiKey({
-      name: parsed.data.name,
-      keyHash: generated.hash,
-      prefix: generated.prefix,
-      scopes: requestedScopes,
-      rateLimitPerMinute: requestedCustomLimit ?? 60
-    });
-    await apiKeys
-      .recordAuditEvent({
-        type: "api_key.created",
-        subject: created.id,
-        metadata: {
-          name: created.name,
-          prefix: created.prefix,
-          scopes: created.scopes,
-          rateLimitPerMinute: created.rateLimitPerMinute,
-          createdBy: admin ? "admin" : "public"
-        }
-      })
-      .catch(() => undefined);
+      const generated = generateApiKey();
+      const created = await apiKeys.createApiKey({
+        name: parsed.data.name,
+        keyHash: generated.hash,
+        prefix: generated.prefix,
+        scopes: requestedScopes,
+        rateLimitPerMinute: requestedCustomLimit ?? 60
+      });
+      await apiKeys
+        .recordAuditEvent({
+          type: "api_key.created",
+          subject: created.id,
+          metadata: {
+            name: created.name,
+            prefix: created.prefix,
+            scopes: created.scopes,
+            rateLimitPerMinute: created.rateLimitPerMinute,
+            createdBy: admin ? "admin" : "public"
+          }
+        })
+        .catch(() => undefined);
 
       return reply.code(201).send({ ...created, key: generated.plaintext });
     }
@@ -1099,29 +1289,42 @@ export async function buildApp({
     "/v1/api-keys/me",
     {
       schema: {
-        description: "The presented API key's own record: name, prefix, scopes, rate limit, and usage timestamps. Never returns the hash or plaintext.",
+        description:
+          "The presented API key's own record: name, prefix, scopes, rate limit, and usage timestamps. Never returns the hash or plaintext.",
         tags: ["api-keys"],
         response: {
-          200: { description: "The presented key's record.", type: "object", additionalProperties: true },
-          401: { description: "No API key was presented.", type: "object", additionalProperties: true },
-          503: { description: "API key management is not configured on this instance.", type: "object", additionalProperties: true }
+          200: {
+            description: "The presented key's record.",
+            type: "object",
+            additionalProperties: true
+          },
+          401: {
+            description: "No API key was presented.",
+            type: "object",
+            additionalProperties: true
+          },
+          503: {
+            description: "API key management is not configured on this instance.",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
     async (request, reply) => {
-    if (!apiKeys) {
-      return reply.code(503).send({
-        error: "api_keys_not_configured",
-        message: "API key management is not available on this instance."
-      });
-    }
+      if (!apiKeys) {
+        return reply.code(503).send({
+          error: "api_keys_not_configured",
+          message: "API key management is not available on this instance."
+        });
+      }
 
-    if (!request.apiKey) {
-      return reply.code(401).send({
-        error: "missing_api_key",
-        message: "Provide the API key to look up via Authorization: Bearer <key> or X-API-Key."
-      });
-    }
+      if (!request.apiKey) {
+        return reply.code(401).send({
+          error: "missing_api_key",
+          message: "Provide the API key to look up via Authorization: Bearer <key> or X-API-Key."
+        });
+      }
 
       return request.apiKey;
     }
@@ -1133,34 +1336,47 @@ export async function buildApp({
     "/v1/api-keys/me",
     {
       schema: {
-        description: "Revoke the presented API key. There is no ownership model yet, so a key can only revoke itself.",
+        description:
+          "Revoke the presented API key. There is no ownership model yet, so a key can only revoke itself.",
         tags: ["api-keys"],
         response: {
-          200: { description: "The revoked key's record, with revokedAt set.", type: "object", additionalProperties: true },
-          401: { description: "No API key was presented.", type: "object", additionalProperties: true },
-          503: { description: "API key management is not configured on this instance.", type: "object", additionalProperties: true }
+          200: {
+            description: "The revoked key's record, with revokedAt set.",
+            type: "object",
+            additionalProperties: true
+          },
+          401: {
+            description: "No API key was presented.",
+            type: "object",
+            additionalProperties: true
+          },
+          503: {
+            description: "API key management is not configured on this instance.",
+            type: "object",
+            additionalProperties: true
+          }
         }
       }
     },
     async (request, reply) => {
-    if (!apiKeys) {
-      return reply.code(503).send({
-        error: "api_keys_not_configured",
-        message: "API key management is not available on this instance."
-      });
-    }
+      if (!apiKeys) {
+        return reply.code(503).send({
+          error: "api_keys_not_configured",
+          message: "API key management is not available on this instance."
+        });
+      }
 
-    if (!request.apiKey) {
-      return reply.code(401).send({
-        error: "missing_api_key",
-        message: "Provide the API key to revoke via Authorization: Bearer <key> or X-API-Key."
-      });
-    }
+      if (!request.apiKey) {
+        return reply.code(401).send({
+          error: "missing_api_key",
+          message: "Provide the API key to revoke via Authorization: Bearer <key> or X-API-Key."
+        });
+      }
 
-    const revoked = await apiKeys.revokeApiKey(request.apiKey.id);
-    await apiKeys
-      .recordAuditEvent({ type: "api_key.revoked", subject: request.apiKey.id })
-      .catch(() => undefined);
+      const revoked = await apiKeys.revokeApiKey(request.apiKey.id);
+      await apiKeys
+        .recordAuditEvent({ type: "api_key.revoked", subject: request.apiKey.id })
+        .catch(() => undefined);
 
       return revoked;
     }

@@ -18,11 +18,27 @@ import {
   parseCommandArgument,
   parseScanAddress,
   resolveChartUrl,
+  shouldAutoScanTelegramAddress,
   telegramFullReportUrl,
+  TELEGRAM_BOT_COMMANDS,
   type TelegramScanLimiter
 } from "./telegram.js";
 
 describe("telegram scan helpers", () => {
+  it("publishes every supported command with a BotFather-compatible description", () => {
+    expect(new Set(TELEGRAM_BOT_COMMANDS.map((item) => item.command)).size).toBe(
+      TELEGRAM_BOT_COMMANDS.length
+    );
+    expect(TELEGRAM_BOT_COMMANDS.map((item) => item.command)).toEqual(
+      expect.arrayContaining(["scan", "track", "stats", "charts", "activitychart", "scanschart"])
+    );
+    expect(
+      TELEGRAM_BOT_COMMANDS.every(
+        (item) => /^[a-z0-9_]{1,32}$/u.test(item.command) && item.description.length <= 256
+      )
+    ).toBe(true);
+  });
+
   it("only recognizes explicitly configured Telegram administrators", () => {
     const admins = new Set(["542602805"]);
     expect(isTelegramAdmin(542602805, admins)).toBe(true);
@@ -34,6 +50,19 @@ describe("telegram scan helpers", () => {
     expect(parseScanAddress("/scan 0x0000000000000000000000000000000000000001")).toBe(
       "0x0000000000000000000000000000000000000001"
     );
+  });
+
+  it("scans token contracts pasted in groups and silently rejects wallet addresses", async () => {
+    const token = "0x0000000000000000000000000000000000000001" as const;
+    await expect(
+      shouldAutoScanTelegramAddress("supergroup", token, () => Promise.resolve(true))
+    ).resolves.toBe(true);
+    await expect(
+      shouldAutoScanTelegramAddress("group", token, () => Promise.resolve(false))
+    ).resolves.toBe(false);
+    await expect(
+      shouldAutoScanTelegramAddress("private", token, () => Promise.resolve(false))
+    ).resolves.toBe(true);
   });
 
   it("extracts command arguments with optional bot mentions", () => {
@@ -294,8 +323,16 @@ describe("telegram scan helpers", () => {
       },
       detectorChecks: [],
       findings: [],
-      liquidity: { status: "UNSUPPORTED", pools: [], message: "Liquidity discovery is not configured yet." },
-      holders: { status: "UNSUPPORTED", snapshots: [], message: "Holder analysis is not configured yet." },
+      liquidity: {
+        status: "UNSUPPORTED",
+        pools: [],
+        message: "Liquidity discovery is not configured yet."
+      },
+      holders: {
+        status: "UNSUPPORTED",
+        snapshots: [],
+        message: "Holder analysis is not configured yet."
+      },
       simulations: [],
       risk: {
         chainId: 4663,
@@ -344,8 +381,16 @@ describe("telegram scan helpers", () => {
       },
       detectorChecks: [],
       findings: [],
-      liquidity: { status: "UNSUPPORTED", pools: [], message: "Liquidity discovery is not configured yet." },
-      holders: { status: "UNSUPPORTED", snapshots: [], message: "Holder analysis is not configured yet." },
+      liquidity: {
+        status: "UNSUPPORTED",
+        pools: [],
+        message: "Liquidity discovery is not configured yet."
+      },
+      holders: {
+        status: "UNSUPPORTED",
+        snapshots: [],
+        message: "Holder analysis is not configured yet."
+      },
       simulations: [],
       risk: {
         chainId: 4663,
@@ -419,7 +464,11 @@ describe("telegram scan helpers", () => {
           }
         ]
       },
-      holders: { status: "UNSUPPORTED", snapshots: [], message: "Holder analysis is not configured yet." },
+      holders: {
+        status: "UNSUPPORTED",
+        snapshots: [],
+        message: "Holder analysis is not configured yet."
+      },
       simulations: [],
       risk: {
         chainId: 4663,
@@ -517,8 +566,16 @@ describe("telegram scan helpers", () => {
       token: { chainId: 4663, address: "0x0000000000000000000000000000000000000003" },
       detectorChecks: [],
       findings: [],
-      liquidity: { status: "UNSUPPORTED", pools: [], message: "Liquidity discovery is not configured yet." },
-      holders: { status: "UNSUPPORTED", snapshots: [], message: "Holder analysis is not configured yet." },
+      liquidity: {
+        status: "UNSUPPORTED",
+        pools: [],
+        message: "Liquidity discovery is not configured yet."
+      },
+      holders: {
+        status: "UNSUPPORTED",
+        snapshots: [],
+        message: "Holder analysis is not configured yet."
+      },
       simulations: [],
       risk: {
         chainId: 4663,
@@ -542,7 +599,9 @@ describe("telegram scan helpers", () => {
     const keyboard = createTelegramResultKeyboard("shortkey", undefined, url);
     const flat = keyboard.inline_keyboard.flat();
     const fullReportButton = flat.find((button) => button.text === "🔗 Full Report");
-    expect(fullReportButton && "url" in fullReportButton ? fullReportButton.url : undefined).toBe(url);
+    expect(fullReportButton && "url" in fullReportButton ? fullReportButton.url : undefined).toBe(
+      url
+    );
   });
 
   it("omits the Taxes button (tax figures are already in the main summary) and includes emoji-labeled buttons", () => {
@@ -658,7 +717,8 @@ describe("telegram scan helpers", () => {
 
   it("bounds per-user and per-group scan rates independently", () => {
     const scanLimiter: TelegramScanLimiter = {
-      check: (key) => (key.includes("user:1") ? { allowed: false, retryAfterSeconds: 9 } : { allowed: true })
+      check: (key) =>
+        key.includes("user:1") ? { allowed: false, retryAfterSeconds: 9 } : { allowed: true }
     };
     const groupScanLimiter: TelegramScanLimiter = {
       check: () => ({ allowed: false, retryAfterSeconds: 20 })
@@ -681,7 +741,9 @@ describe("telegram scan helpers", () => {
 
     // The same not-individually-limited user in a private chat is unaffected by the group
     // limiter, since it is never consulted outside group/supergroup chats.
-    expect(checkTelegramRateLimit(scanLimiter, groupScanLimiter, { id: 3, type: "private" }, 2)).toEqual({
+    expect(
+      checkTelegramRateLimit(scanLimiter, groupScanLimiter, { id: 3, type: "private" }, 2)
+    ).toEqual({
       allowed: true
     });
   });

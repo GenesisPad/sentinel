@@ -73,6 +73,8 @@ export interface CreateScanInput {
   requestedBy?: string;
 }
 
+export type ScanRequestSource = "WEB" | "TELEGRAM" | "API";
+
 export interface ScanRepository {
   createOrGetQueuedScan(input: CreateScanInput): Promise<{ scan: ScanProgress; created: boolean }>;
   getScan(scanId: string): Promise<ScanProgress | null>;
@@ -86,6 +88,7 @@ export interface ScanRepository {
   getRecentScans(limit: number): Promise<RecentScanView[]>;
   getPublicAnalytics?(): Promise<PublicAnalyticsView>;
   recordAnalyticsVisit?(visitorHash: string): Promise<void>;
+  recordScanRequest?(scanId: string, source: ScanRequestSource): Promise<void>;
   getTokenFindings(chainId: number, address: `0x${string}`): Promise<SecurityFindingView[]>;
   getRiskSnapshot(chainId: number, address: `0x${string}`): Promise<RiskSnapshot | null>;
   getScanTarget(scanId: string): Promise<ScanTarget | null>;
@@ -446,10 +449,21 @@ export function createScanRepository(db: PrismaDatabase): ScanRepository {
     },
 
     async recordAnalyticsVisit(visitorHash) {
-      await db.analyticsVisitor.upsert({
-        where: { id: visitorHash },
-        create: { id: visitorHash },
-        update: { visitCount: { increment: 1 } }
+      await db.$transaction([
+        db.analyticsVisitor.upsert({
+          where: { id: visitorHash },
+          create: { id: visitorHash },
+          update: { visitCount: { increment: 1 } }
+        }),
+        db.webActivity.create({
+          data: { visitorHash, action: "page_view" }
+        })
+      ]);
+    },
+
+    async recordScanRequest(scanId, source) {
+      await db.scanRequest.create({
+        data: { scanId, source }
       });
     },
 

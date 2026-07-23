@@ -16,6 +16,7 @@
     "@fastify/swagger": "9.8.0",
     "@fastify/swagger-ui": "6.1.0",
     "@genesis-sentinel/config": "workspace:*",
+    "@genesis-sentinel/chain-adapters": "workspace:*",
     "@genesis-sentinel/database": "workspace:*",
     "@genesis-sentinel/observability": "workspace:*",
     "@genesis-sentinel/providers": "workspace:*",

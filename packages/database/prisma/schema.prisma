@@ -180,10 +180,31 @@ model Scan {
   findings        Finding[]
   riskAssessment  RiskAssessment?
   simulationRuns  SimulationRun[]
+  requests        ScanRequest[]
 
   @@unique([chainId, targetAddress, idempotencyKeyHash])
   @@index([chainId, targetAddress])
   @@index([state])
+}
+
+enum ScanRequestSource {
+  WEB
+  TELEGRAM
+  API
+}
+
+/// One row per scan request, including cache hits, so channel attribution measures demand
+/// rather than only newly-created worker jobs.
+model ScanRequest {
+  id        String            @id @default(cuid())
+  scanId    String
+  source    ScanRequestSource
+  createdAt DateTime          @default(now())
+
+  scan Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([source, createdAt])
+  @@index([scanId, createdAt])
 }
 
 model ScanStage {
@@ -209,6 +230,18 @@ model AnalyticsVisitor {
   firstSeenAt DateTime @default(now())
   lastSeenAt  DateTime @updatedAt
   visitCount  Int      @default(1)
+}
+
+/// Timestamped web activity used for traffic-source comparisons and time-series charts.
+/// The visitor id is the same privacy-preserving HMAC used by AnalyticsVisitor, never a raw IP.
+model WebActivity {
+  id          String   @id @default(cuid())
+  visitorHash String?
+  action      String
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action, createdAt])
 }
 
 model Detector {

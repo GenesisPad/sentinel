@@ -49,6 +49,23 @@ export type TelegramRecordActivity = (input: {
   action: string;
 }) => Promise<void>;
 export type TelegramGetAdminAnalytics = () => Promise<TelegramAnalytics>;
+export type TelegramIsTokenContract = (address: `0x${string}`) => Promise<boolean>;
+
+export const TELEGRAM_BOT_COMMANDS = [
+  { command: "start", description: "Open Genesis Sentinel and see the main commands" },
+  { command: "help", description: "Learn how contract scanning and tracking work" },
+  { command: "scan", description: "Scan a token contract: /scan <address>" },
+  { command: "track", description: "Scan and track a token contract in this chat" },
+  { command: "untrack", description: "Stop tracking a token contract in this chat" },
+  { command: "tracked", description: "List token contracts tracked in this chat" },
+  { command: "status", description: "Check scan progress: /status <scan id>" },
+  { command: "result", description: "Open a saved scan result: /result <scan id>" },
+  { command: "stats", description: "Admin: web and Telegram traffic statistics" },
+  { command: "charts", description: "Admin: open analytics charts" },
+  { command: "activitychart", description: "Admin: web and bot activity chart" },
+  { command: "scanschart", description: "Admin: scan traffic by source" },
+  { command: "userbasechart", description: "Admin: Telegram user growth chart" }
+] as const;
 
 const addressPattern = /0x[a-fA-F0-9]{40}/;
 const terminalScanStates = new Set(["COMPLETED", "PARTIALLY_COMPLETED", "FAILED"]);
@@ -158,6 +175,7 @@ export function createTelegramBot(options: {
   adminIds?: string[];
   recordActivity?: TelegramRecordActivity;
   getAdminAnalytics?: TelegramGetAdminAnalytics;
+  isTokenContract?: TelegramIsTokenContract;
 }) {
   const bot = new Bot(options.token);
   const getSummaryScanResult = options.refreshScanResult ?? options.getScanResult;
@@ -189,7 +207,8 @@ export function createTelegramBot(options: {
 
   const requireAdmin = async (context: Context): Promise<boolean> => {
     if (isTelegramAdmin(context.from?.id, adminIds)) return true;
-    const message = "🔒 Admin access required. Sentinel statistics and operational charts are restricted to bot administrators.";
+    const message =
+      "🔒 Admin access required. Sentinel statistics and operational charts are restricted to bot administrators.";
     if (context.callbackQuery) {
       await context.answerCallbackQuery({ text: message, show_alert: true });
     } else {
@@ -213,28 +232,72 @@ export function createTelegramBot(options: {
     const analytics = await options.getAdminAnalytics();
     const events =
       kind === "activity"
-        ? analytics.activities
+        ? [...analytics.activities, ...analytics.webActivityEvents]
         : kind === "scans"
-          ? analytics.scans
+          ? [
+              ...analytics.webScanEvents,
+              ...analytics.telegramScanEvents,
+              ...analytics.apiScanEvents
+            ]
           : analytics.registrations;
     const series = buildTelegramSeries(events, range, analytics.generatedAt, kind === "users");
+    const datasets =
+      kind === "activity"
+        ? [
+            {
+              label: "Web",
+              values: buildTelegramSeries(analytics.webActivityEvents, range, analytics.generatedAt)
+                .values
+            },
+            {
+              label: "Telegram",
+              values: buildTelegramSeries(analytics.activities, range, analytics.generatedAt).values
+            }
+          ]
+        : kind === "scans"
+          ? [
+              {
+                label: "Web",
+                values: buildTelegramSeries(analytics.webScanEvents, range, analytics.generatedAt)
+                  .values
+              },
+              {
+                label: "Telegram",
+                values: buildTelegramSeries(
+                  analytics.telegramScanEvents,
+                  range,
+                  analytics.generatedAt
+                ).values
+              },
+              {
+                label: "API",
+                values: buildTelegramSeries(analytics.apiScanEvents, range, analytics.generatedAt)
+                  .values
+              }
+            ]
+          : undefined;
     const title =
       kind === "activity"
-        ? "Telegram activity"
+        ? "Web + Telegram activity"
         : kind === "scans"
-          ? "Sentinel scans"
+          ? "Scan requests by source"
           : "Registered Telegram users";
     const image = await renderTelegramChart({
       title,
       subtitle: `${range === "all" ? "All time" : `Last ${range}`} · UTC`,
       labels: series.labels,
       values: series.values,
-      line: kind === "users"
+      line: kind === "users",
+      ...(datasets ? { datasets } : {})
     });
     const keyboard = adminChartKeyboard(kind, range);
     if (replace) {
       await context.editMessageMedia(
-        { type: "photo", media: new InputFile(image, `${kind}-${range}.png`), caption: `${title} · ${range === "all" ? "all time" : range}` },
+        {
+          type: "photo",
+          media: new InputFile(image, `${kind}-${range}.png`),
+          caption: `${title} · ${range === "all" ? "all time" : range}`
+        },
         { reply_markup: keyboard }
       );
       await context.answerCallbackQuery({ text: "Chart refreshed." });
@@ -249,7 +312,8 @@ export function createTelegramBot(options: {
 
   bot.command("stats", async (context) => {
     if (!(await requireAdmin(context))) return;
-    if (!options.getAdminAnalytics) return void (await context.reply("⚠️ Admin analytics are not configured."));
+    if (!options.getAdminAnalytics)
+      return void (await context.reply("⚠️ Admin analytics are not configured."));
     const stats = await options.getAdminAnalytics();
     await context.reply(
       [
@@ -258,9 +322,18 @@ export function createTelegramBot(options: {
         `👤 Telegram users: <b>${stats.users.toLocaleString("en-US")}</b>`,
         `💬 Telegram chats: <b>${stats.chats.toLocaleString("en-US")}</b>`,
         `👁 Tracked contracts: <b>${stats.trackedContracts.toLocaleString("en-US")}</b>`,
-        `🔎 Total scans: <b>${stats.totalScans.toLocaleString("en-US")}</b>`,
+        `🔎 Worker scans: <b>${stats.totalScans.toLocaleString("en-US")}</b>`,
         `✅ Completed: <b>${stats.completedScans.toLocaleString("en-US")}</b>`,
-        `⚠️ Failed: <b>${stats.failedScans.toLocaleString("en-US")}</b>`
+        `⚠️ Failed: <b>${stats.failedScans.toLocaleString("en-US")}</b>`,
+        "",
+        "<b>Scan requests by source</b>",
+        `🌐 Web: <b>${stats.webScans.toLocaleString("en-US")}</b>`,
+        `🤖 Telegram: <b>${stats.telegramScans.toLocaleString("en-US")}</b>`,
+        `🔌 API: <b>${stats.apiScans.toLocaleString("en-US")}</b>`,
+        "",
+        "<b>Activity by source</b>",
+        `🌐 Web page views: <b>${stats.webActivities.toLocaleString("en-US")}</b>`,
+        `🤖 Telegram interactions: <b>${stats.telegramActivities.toLocaleString("en-US")}</b>`
       ].join("\n"),
       { parse_mode: "HTML", reply_markup: adminChartsMenuKeyboard() }
     );
@@ -553,6 +626,18 @@ export function createTelegramBot(options: {
       return;
     }
 
+    const isGroup = context.chat.type === "group" || context.chat.type === "supergroup";
+    if (isGroup && options.isTokenContract) {
+      const isToken = await shouldAutoScanTelegramAddress(
+        context.chat.type,
+        address,
+        options.isTokenContract
+      );
+      // EOAs/wallets and contracts that do not expose ERC-20 metadata are deliberately ignored
+      // in groups so normal address sharing does not trigger noisy false-positive scans.
+      if (!isToken) return;
+    }
+
     const limit = checkTelegramRateLimit(
       options.scanLimiter,
       options.groupScanLimiter,
@@ -602,9 +687,13 @@ export function createTelegramBot(options: {
     let stageMessageId: number | undefined;
     let lastDisplayedState = scan.state;
     try {
-      const sent = await bot.api.sendMessage(chatId, formatScanStageMessage(scan.state, trackingLine), {
-        parse_mode: "Markdown"
-      });
+      const sent = await bot.api.sendMessage(
+        chatId,
+        formatScanStageMessage(scan.state, trackingLine),
+        {
+          parse_mode: "Markdown"
+        }
+      );
       stageMessageId = sent.message_id;
     } catch {
       // If even the first stage message can't be sent (e.g. the bot was blocked, or this is a
@@ -686,6 +775,16 @@ export function parseCommandArgument(text: string): string | null {
     .replace(/^\/[a-zA-Z_]+(?:@[a-zA-Z0-9_]+)?\s*/, "")
     .trim();
   return argument.length > 0 ? argument : null;
+}
+
+export async function shouldAutoScanTelegramAddress(
+  chatType: string,
+  address: `0x${string}`,
+  isTokenContract?: TelegramIsTokenContract
+): Promise<boolean> {
+  if (chatType !== "group" && chatType !== "supergroup") return true;
+  if (!isTokenContract) return true;
+  return isTokenContract(address).catch(() => false);
 }
 
 export function createTelegramScanLimiter(options: TelegramScanLimitOptions): TelegramScanLimiter {
@@ -778,12 +877,17 @@ export function formatTelegramResultReply(result: ScanResultView): string {
   const honeypot = readHoneypotStatus(result);
   const liquidity = readLiquidityData(result);
   const concentration = readHolderConcentration(result);
-  const ownerAddress = result.token.ownerAddress ? ` (` + "`" + `${shortenAddress(result.token.ownerAddress)}` + "`" + `)` : "";
+  const ownerAddress = result.token.ownerAddress
+    ? ` (` + "`" + `${shortenAddress(result.token.ownerAddress)}` + "`" + `)`
+    : "";
   const ownership = formatOwnershipStatus(result);
 
   const topRisksBlock =
     topFindings.length > 0
-      ? ["🚩 *Top risks*", ...topFindings.map((f) => `${severityEmoji(f.severity)} ${escapeMarkdown(f.title)}`)].join("\n")
+      ? [
+          "🚩 *Top risks*",
+          ...topFindings.map((f) => `${severityEmoji(f.severity)} ${escapeMarkdown(f.title)}`)
+        ].join("\n")
       : "🚩 *Top risks:* none persisted ✅";
 
   const summary = buildTokenSecuritySummary(result);
@@ -802,7 +906,9 @@ export function formatTelegramResultReply(result: ScanResultView): string {
     controlsSummaryLine(result),
     "",
     ownership ? `👤 Owner: ${ownership}${ownerAddress}` : null,
-    result.token.deployerAddress ? `🏗️ Deployer: \`${shortenAddress(result.token.deployerAddress)}\`` : null,
+    result.token.deployerAddress
+      ? `🏗️ Deployer: \`${shortenAddress(result.token.deployerAddress)}\``
+      : null,
     deployerBalanceLine(summary.deployerBalance, result),
     devClusterLine(summary.devCluster),
     sourceVerifiedLine(result),
@@ -821,7 +927,9 @@ export function formatTelegramResultReply(result: ScanResultView): string {
     scannedAtLine(result),
     `${friendlyScanState(result.scan.state)} · v${escapeMarkdown(result.scan.scannerVersion)}`,
     "_DYOR/NFA. Risk indicator, not a guarantee._"
-  ]).filter((line, index, lines) => line !== "" || (lines[index - 1] !== "" && lines[index + 1] !== ""));
+  ]).filter(
+    (line, index, lines) => line !== "" || (lines[index - 1] !== "" && lines[index + 1] !== "")
+  );
 
   return lines.join("\n");
 }
@@ -873,10 +981,7 @@ function adminChartsMenuKeyboard(): InlineKeyboard {
     .text("👤 User growth", "admincharts:users");
 }
 
-function adminChartKeyboard(
-  kind: TelegramChartKind,
-  selected: TelegramChartRange
-): InlineKeyboard {
+function adminChartKeyboard(kind: TelegramChartKind, selected: TelegramChartRange): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   for (const range of ["24h", "7d", "30d", "all"] as const) {
     keyboard.text(
@@ -1008,7 +1113,9 @@ export function formatTelegramSectionReply(
         .map(
           (wallet) =>
             `\`${shortenAddress(wallet.address)}\` — ${escapeMarkdown(roleLabels[wallet.role] ?? wallet.role)}: ${
-              wallet.holdingPct === null ? "not measured" : formatSupplyPercentage(wallet.holdingPct)
+              wallet.holdingPct === null
+                ? "not measured"
+                : formatSupplyPercentage(wallet.holdingPct)
             }`
         ),
       devCluster.wallets.length > 10 ? `_…and ${devCluster.wallets.length - 10} more._` : null,
@@ -1306,7 +1413,7 @@ function taxLine(tax: { buy: string; sell: string; transfer: string }): string |
   const values = [
     tax.buy ? `B ${markPunitiveTax(tax.buy)}` : null,
     tax.sell ? `S ${markPunitiveTax(tax.sell)}` : null,
-    tax.transfer ? `T ${markPunitiveTax(tax.transfer)}` : null,
+    tax.transfer ? `T ${markPunitiveTax(tax.transfer)}` : null
   ].filter((value): value is string => value !== null);
   return values.length > 0 ? `🧾 Tax: ${values.join(" | ")}` : null;
 }
@@ -1352,7 +1459,7 @@ function marketLine(result: ScanResultView): string | null {
   const volume = formatCompactUsd(result.token.volume24hUsd);
   const values = [
     marketCap ? `MCap: ${marketCap}` : null,
-    volume ? `Vol 24h: ${volume}` : null,
+    volume ? `Vol 24h: ${volume}` : null
   ].filter((value): value is string => value !== null);
   return values.length > 0 ? `📊 ${values.join(" | ")}` : null;
 }
@@ -1366,7 +1473,7 @@ function liquidityLine(liquidity: ReturnType<typeof readLiquidityData>): string 
   const values = [
     liquidity.totalUsd ? `Liquidity: ${liquidity.totalUsd}` : null,
     liquidity.healthLabel ? `Health: ${liquidity.healthLabel}` : null,
-    liquidity.burnedPct ? `Burn/Lock: ${liquidity.burnedPct}` : null,
+    liquidity.burnedPct ? `Burn/Lock: ${liquidity.burnedPct}` : null
   ].filter((value): value is string => value !== null);
   return values.length > 0 ? `💧 ${values.join(" | ")}` : null;
 }
@@ -1378,7 +1485,7 @@ function holdersLine(
   const holderCount = formatHolderCount(result);
   const values = [
     holderCount ? `Holders: ${holderCount}` : null,
-    concentration.top10 ? `Top 10: ${concentration.top10}` : null,
+    concentration.top10 ? `Top 10: ${concentration.top10}` : null
   ].filter((value): value is string => value !== null);
   return values.length > 0 ? `👥 ${values.join(" | ")}` : null;
 }
@@ -1389,9 +1496,11 @@ const LIQUIDITY_HEALTH_LABEL: Record<LiquidityHealthTier, string> = {
   healthy: "Healthy"
 };
 
-function readLiquidityData(
-  result: ScanResultView
-): { totalUsd: string; burnedPct: string; healthLabel: string } {
+function readLiquidityData(result: ScanResultView): {
+  totalUsd: string;
+  burnedPct: string;
+  healthLabel: string;
+} {
   // Uses the same pool-selection and health-tiering rules as the web app
   // (@genesis-sentinel/shared) so Telegram can't independently drift into the same bugs already
   // found and fixed there: picking pools[0] blindly instead of the highest-liquidity pool
@@ -1411,7 +1520,8 @@ function readLiquidityData(
     totalUsd != null && marketCapUsd != null && marketCapUsd > 0
       ? (totalUsd / 2 / marketCapUsd) * 100
       : null;
-  const healthTier = totalUsd != null ? liquidityHealthTier(totalUsd, quoteSidePctOfMarketCap, marketCapUsd) : null;
+  const healthTier =
+    totalUsd != null ? liquidityHealthTier(totalUsd, quoteSidePctOfMarketCap, marketCapUsd) : null;
 
   return {
     totalUsd: totalUsd != null ? (formatCompactUsd(totalUsd) ?? "") : "",
@@ -1537,7 +1647,8 @@ function createTelegramScanInput(
   const input: SubmitScanInput = {
     chainId: 4663,
     address,
-    idempotencyKey: createTelegramIdempotencyKey(chatId, address)
+    idempotencyKey: createTelegramIdempotencyKey(chatId, address),
+    source: "TELEGRAM"
   };
 
   if (fromId) {
@@ -1594,4 +1705,3 @@ function createTelegramChatIdentity(
 
   return chat;
 }
-

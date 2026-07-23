@@ -47,6 +47,9 @@ importers:
       '@fastify/swagger-ui':
         specifier: 6.1.0
         version: 6.1.0
+      '@genesis-sentinel/chain-adapters':
+        specifier: workspace:*
+        version: link:../../packages/chain-adapters
       '@genesis-sentinel/config':
         specifier: workspace:*
         version: link:../../packages/config

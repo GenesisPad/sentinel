@@ -2,7 +2,12 @@ import type { PublicAnalyticsView, ScanProgress, ScanResultView } from "@genesis
 import { mapProgressToJob, mapResultToReport } from "./adapt";
 import { CHAINS, type ChainId } from "./chains";
 import type { RecentScan, ScanJob, ScanReport } from "./types";
-import { FIXTURE_RECENT, buildFixtureAnalytics, buildFixtureJob, buildFixtureReport } from "./fixtures";
+import {
+  FIXTURE_RECENT,
+  buildFixtureAnalytics,
+  buildFixtureJob,
+  buildFixtureReport
+} from "./fixtures";
 
 // Relative by default: the production Nginx config proxies /v1/* to the API on the same
 // origin, so no build-time env value has to be baked into the client bundle to get this
@@ -34,7 +39,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly code: string,
-    readonly status?: number,
+    readonly status?: number
   ) {
     super(message);
     this.name = "ApiError";
@@ -46,7 +51,7 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
   try {
     res = await fetch(`${apiBaseUrl()}${path}`, {
       ...init,
-      headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+      headers: { "content-type": "application/json", ...(init?.headers ?? {}) }
     });
   } catch {
     throw new ApiError("The network request failed. Check your connection.", "network_error");
@@ -86,8 +91,11 @@ export async function createScan(args: CreateScanArgs): Promise<ScanJob> {
   const chainId = numericChainId(args.chainId);
   const json = await request("/scans", {
     method: "POST",
-    headers: { "idempotency-key": idempotencyKeyFor(chainId, args.address, args.fresh) },
-    body: JSON.stringify({ chainId, address: args.address }),
+    headers: {
+      "idempotency-key": idempotencyKeyFor(chainId, args.address, args.fresh),
+      "x-sentinel-client": "web"
+    },
+    body: JSON.stringify({ chainId, address: args.address })
   });
   return mapProgressToJob(json as ScanProgress);
 }
@@ -111,7 +119,10 @@ export async function getScanReport(scanId: string): Promise<ScanReport> {
  * ever run for it (404). Never creates a scan itself; callers decide what "no scan yet" means
  * for their flow.
  */
-export async function getExistingTokenReport(chainId: ChainId, address: string): Promise<ScanReport | null> {
+export async function getExistingTokenReport(
+  chainId: ChainId,
+  address: string
+): Promise<ScanReport | null> {
   if (USE_FIXTURES) return null;
   const numeric = numericChainId(chainId);
   try {
@@ -148,13 +159,15 @@ export async function getRecentScans(): Promise<RecentScan[]> {
   if (USE_FIXTURES) return FIXTURE_RECENT;
   const json = (await request("/scans/recent")) as { scans: RecentScanApiRow[] };
   return json.scans.map((row) => ({
-    chainId: (Object.keys(CHAINS) as ChainId[]).find((key) => CHAINS[key].chainId === row.chainId) ?? "robinhood",
+    chainId:
+      (Object.keys(CHAINS) as ChainId[]).find((key) => CHAINS[key].chainId === row.chainId) ??
+      "robinhood",
     address: row.address,
     name: row.name ?? row.symbol ?? "Unknown token",
     symbol: row.symbol ?? "",
     riskScore: row.riskScore,
     riskLevel: row.riskLevel,
-    scannedAt: row.scannedAt,
+    scannedAt: row.scannedAt
   }));
 }
 
