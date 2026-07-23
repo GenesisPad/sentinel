@@ -11,7 +11,41 @@ import type {
   ScanResultView,
   TokenSecuritySummaryView
 } from "@genesis-sentinel/shared";
-import { buildApp } from "./app.js";
+import { buildApp, findExternalTokenChain } from "./app.js";
+
+describe("findExternalTokenChain", () => {
+  it("identifies a matching Ethereum token without treating it as a Robinhood wallet", async () => {
+    const address = "0xc668695dcbcf682de106da94bde65c9bc79362d3" as const;
+    const chain = await findExternalTokenChain(address, () =>
+      Promise.resolve(
+        Response.json({
+          pairs: [{ chainId: "ethereum", baseToken: { address } }]
+        })
+      )
+    );
+
+    expect(chain).toBe("Ethereum");
+  });
+
+  it("does not classify a pair whose base token does not match the submitted address", async () => {
+    const chain = await findExternalTokenChain(
+      "0xc668695dcbcf682de106da94bde65c9bc79362d3",
+      () =>
+        Promise.resolve(
+          Response.json({
+            pairs: [
+              {
+                chainId: "ethereum",
+                baseToken: { address: "0x0000000000000000000000000000000000000001" }
+              }
+            ]
+          })
+        )
+    );
+
+    expect(chain).toBeNull();
+  });
+});
 
 function createInMemoryApiKeyRepository() {
   const keysByHash = new Map<string, string>();

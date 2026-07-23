@@ -50,7 +50,13 @@ export type TelegramRecordActivity = (input: {
   action: string;
 }) => Promise<void>;
 export type TelegramGetAdminAnalytics = () => Promise<TelegramAnalytics>;
-export type TelegramIsTokenContract = (address: `0x${string}`) => Promise<boolean>;
+export type TelegramTokenContractStatus =
+  | { kind: "SUPPORTED" }
+  | { kind: "UNSUPPORTED_CHAIN"; chainName: string }
+  | { kind: "NOT_TOKEN" };
+export type TelegramIsTokenContract = (
+  address: `0x${string}`
+) => Promise<TelegramTokenContractStatus | boolean>;
 
 export const TELEGRAM_BOT_COMMANDS = [
   { command: "start", description: "Open Genesis Sentinel and see the main commands" },
@@ -404,13 +410,9 @@ export function createTelegramBot(options: {
       return;
     }
     if (!context.chat) return;
-    if (
-      options.isTokenContract &&
-      !(await options.isTokenContract(address).catch(() => false))
-    ) {
-      await context.reply(
-        "ℹ️ That address is a wallet or does not expose the ERC-20 token interface, so Sentinel did not scan it."
-      );
+    const tokenStatus = await classifyTelegramAddress(address, options.isTokenContract);
+    if (tokenStatus.kind !== "SUPPORTED") {
+      await context.reply(telegramUnsupportedAddressMessage(tokenStatus, "scan"));
       return;
     }
 
@@ -440,13 +442,9 @@ export function createTelegramBot(options: {
       return;
     }
     if (!context.chat) return;
-    if (
-      options.isTokenContract &&
-      !(await options.isTokenContract(address).catch(() => false))
-    ) {
-      await context.reply(
-        "ℹ️ That address is a wallet or does not expose the ERC-20 token interface, so Sentinel did not track or scan it."
-      );
+    const tokenStatus = await classifyTelegramAddress(address, options.isTokenContract);
+    if (tokenStatus.kind !== "SUPPORTED") {
+      await context.reply(telegramUnsupportedAddressMessage(tokenStatus, "track"));
       return;
     }
 
@@ -647,18 +645,15 @@ export function createTelegramBot(options: {
 
     const isGroup = context.chat.type === "group" || context.chat.type === "supergroup";
     if (options.isTokenContract) {
-      const isToken = await shouldAutoScanTelegramAddress(
-        context.chat.type,
+      const tokenStatus = await classifyTelegramAddress(
         address,
         options.isTokenContract
       );
       // EOAs/wallets and contracts that do not expose ERC-20 metadata are deliberately ignored
       // in groups so normal address sharing does not trigger noisy false-positive scans.
-      if (!isToken) {
-        if (!isGroup) {
-          await context.reply(
-            "ℹ️ That address is a wallet or does not expose the ERC-20 token interface, so Sentinel did not scan it."
-          );
+      if (tokenStatus.kind !== "SUPPORTED") {
+        if (!isGroup || tokenStatus.kind === "UNSUPPORTED_CHAIN") {
+          await context.reply(telegramUnsupportedAddressMessage(tokenStatus, "scan"));
         }
         return;
       }
@@ -808,8 +803,31 @@ export async function shouldAutoScanTelegramAddress(
   address: `0x${string}`,
   isTokenContract?: TelegramIsTokenContract
 ): Promise<boolean> {
-  if (!isTokenContract) return true;
-  return isTokenContract(address).catch(() => false);
+  return (await classifyTelegramAddress(address, isTokenContract)).kind === "SUPPORTED";
+}
+
+async function classifyTelegramAddress(
+  address: `0x${string}`,
+  isTokenContract?: TelegramIsTokenContract
+): Promise<TelegramTokenContractStatus> {
+  if (!isTokenContract) return { kind: "SUPPORTED" };
+  const result = await isTokenContract(address).catch(() => false);
+  if (typeof result === "boolean") {
+    return { kind: result ? "SUPPORTED" : "NOT_TOKEN" };
+  }
+  return result;
+}
+
+function telegramUnsupportedAddressMessage(
+  status: Exclude<TelegramTokenContractStatus, { kind: "SUPPORTED" }>,
+  action: "scan" | "track"
+): string {
+  if (status.kind === "UNSUPPORTED_CHAIN") {
+    return `ℹ️ That is a valid token contract on ${status.chainName}, but Genesis Sentinel currently scans Robinhood Chain only. It was not ${action === "scan" ? "scanned" : "tracked"}.`;
+  }
+  return action === "scan"
+    ? "ℹ️ No token contract exists at that address on Robinhood Chain, so Sentinel did not scan it."
+    : "ℹ️ No token contract exists at that address on Robinhood Chain, so Sentinel did not track or scan it.";
 }
 
 export function createTelegramScanLimiter(options: TelegramScanLimitOptions): TelegramScanLimiter {

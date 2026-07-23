@@ -379,9 +379,16 @@ export async function buildApp({
         isTokenContract: async (address) => {
           if (!telegramChainAdapter) return false;
           const bytecode = await telegramChainAdapter.getBytecode({ address });
-          if (bytecode === "0x") return false;
+          if (bytecode === "0x") {
+            const chainName = await findExternalTokenChain(address);
+            return chainName
+              ? { kind: "UNSUPPORTED_CHAIN" as const, chainName }
+              : { kind: "NOT_TOKEN" as const };
+          }
           const metadata = await telegramChainAdapter.getTokenMetadata(address);
-          return metadata.name !== null || metadata.symbol !== null || metadata.decimals !== null;
+          return metadata.name !== null || metadata.symbol !== null || metadata.decimals !== null
+            ? { kind: "SUPPORTED" as const }
+            : { kind: "NOT_TOKEN" as const };
         },
         ...(recordTelegramActivity ? { recordActivity: recordTelegramActivity } : {}),
         ...(getTelegramAdminAnalytics ? { getAdminAnalytics: getTelegramAdminAnalytics } : {}),
@@ -1413,4 +1420,40 @@ export async function buildApp({
   });
 
   return app;
+}
+
+const DEXSCREENER_CHAIN_NAMES: Readonly<Record<string, string>> = {
+  ethereum: "Ethereum",
+  bsc: "BNB Chain",
+  base: "Base",
+  arbitrum: "Arbitrum",
+  polygon: "Polygon",
+  optimism: "Optimism",
+  avalanche: "Avalanche",
+  solana: "Solana"
+};
+
+export async function findExternalTokenChain(
+  address: `0x${string}`,
+  fetcher: typeof fetch = fetch
+): Promise<string | null> {
+  try {
+    const response = await fetcher(
+      `https://api.dexscreener.com/latest/dex/tokens/${address}`,
+      { signal: AbortSignal.timeout(3_000) }
+    );
+    if (!response.ok) return null;
+    const payload = (await response.json()) as {
+      pairs?: Array<{ chainId?: string; baseToken?: { address?: string } }>;
+    };
+    const pair = payload.pairs?.find(
+      (candidate) =>
+        candidate.baseToken?.address?.toLowerCase() === address.toLowerCase() &&
+        candidate.chainId !== "robinhood"
+    );
+    if (!pair?.chainId) return null;
+    return DEXSCREENER_CHAIN_NAMES[pair.chainId] ?? pair.chainId;
+  } catch {
+    return null;
+  }
 }
