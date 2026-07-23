@@ -113,7 +113,11 @@ function buildAnswers(report: ScanReport): Answer[] {
           hint: `ETH side: ${formatUsd(liquidity.totalUsd / 2)}. This figure is the full pool value (token + paired asset) — health is measured against the paired-asset side alone, since that's what actually backs sell orders.`,
         }
       : null,
-    lpLockedAnswer(liquidity.locked, liquidity.burnedPct, liquidity.totalUsd),
+    lpLockedAnswer(
+      liquidity.locked,
+      liquidity.lockedPct ?? liquidity.burnedPct,
+      liquidity.totalUsd
+    ),
     ownerAnswer(controls.ownershipRenounced),
     holders.top10Pct != null
       ? { question: "Top 10 holders", value: `${holders.top10Pct.toFixed(1)}%`, tone: concentrationTone(holders.top10Pct) }

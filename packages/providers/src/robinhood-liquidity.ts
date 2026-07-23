@@ -240,6 +240,19 @@ async function discoverUniswapV2Pool(
         reason: "Locker lookup failed."
       })
     );
+  const lockedAmount =
+    lockStatus.status === "LOCKED" && lockStatus.lockedAmountRaw
+      ? BigInt(lockStatus.lockedAmountRaw)
+      : 0n;
+  const protectedTotal = burnedTotal + lockedAmount;
+  const protectedPct =
+    lpTotalSupply > 0n
+      ? Math.min(100, Number((protectedTotal * 10_000n) / lpTotalSupply) / 100)
+      : null;
+  const lockedPct =
+    lpTotalSupply > 0n && lockedAmount > 0n
+      ? Math.min(100, Number((lockedAmount * 10_000n) / lpTotalSupply) / 100)
+      : null;
 
   return {
     poolAddress: pairAddress,
@@ -254,8 +267,12 @@ async function discoverUniswapV2Pool(
       quoteSymbol: quote.symbol,
       quoteDecimals: quote.decimals,
       lpTotalSupplyRaw: lpTotalSupply.toString(),
-      lpBurnedOrLockedRaw: burnedTotal.toString(),
-      lpBurnedOrLockedPct: lpBurnedPct,
+      lpBurnedRaw: burnedTotal.toString(),
+      lpBurnedPct,
+      lpLockedRaw: lockedAmount.toString(),
+      lpLockedPct: lockedPct,
+      lpBurnedOrLockedRaw: protectedTotal.toString(),
+      lpBurnedOrLockedPct: protectedPct,
       totalLiquidityUsd,
       // Only lpBurnedOrLockedPct above is a verified on-chain burn-balance measurement.
       // lockStatus reflects a separate, distinct claim (a real third-party locker contract

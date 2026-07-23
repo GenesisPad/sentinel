@@ -265,7 +265,17 @@ function mapLiquidity(view: ScanResultView): LiquidityInfo {
 
   const data = pool.liquidityData;
   const burnedPct =
-    typeof data.lpBurnedOrLockedPct === "number" ? data.lpBurnedOrLockedPct : undefined;
+    typeof data.lpBurnedPct === "number"
+      ? data.lpBurnedPct
+      : typeof data.lpBurnedOrLockedPct === "number"
+        ? data.lpBurnedOrLockedPct
+        : undefined;
+  const lockedPct =
+    typeof data.lpLockedPct === "number" ? data.lpLockedPct : undefined;
+  const protectedPct =
+    typeof data.lpBurnedOrLockedPct === "number"
+      ? data.lpBurnedOrLockedPct
+      : burnedPct;
   const totalUsd = typeof data.totalLiquidityUsd === "number" ? data.totalLiquidityUsd : null;
   // totalLiquidityUsd is computed as quote-side value * 2 (packages/providers), assuming a
   // roughly symmetric pool — so the quote (native/stablecoin) side alone is half of it.
@@ -278,9 +288,9 @@ function mapLiquidity(view: ScanResultView): LiquidityInfo {
 
   return {
     totalUsd,
-    locked: burnedPct != null ? burnedPct >= 50 : null,
+    locked: protectedPct != null ? protectedPct >= 50 : null,
     burnedPct,
-    lockedPct: burnedPct,
+    lockedPct,
     poolAddress: pool.poolAddress,
     dex: pool.dex ?? undefined,
     quoteSidePctOfMarketCap,

@@ -18,7 +18,6 @@ export interface TelegramAnalytics {
   webScans: number;
   telegramScans: number;
   apiScans: number;
-  unknownScans: number;
   webActivities: number;
   telegramActivities: number;
   activities: TelegramAnalyticsEvent[];
@@ -27,7 +26,6 @@ export interface TelegramAnalytics {
   webScanEvents: TelegramAnalyticsEvent[];
   telegramScanEvents: TelegramAnalyticsEvent[];
   apiScanEvents: TelegramAnalyticsEvent[];
-  unknownScanEvents: TelegramAnalyticsEvent[];
   registrations: TelegramAnalyticsEvent[];
 }
 

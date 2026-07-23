@@ -24,7 +24,8 @@ export function LiquidityCard({ liquidity, technical }: { liquidity: LiquidityIn
   // Only render segments we have real data for — a 0% fallback for deployer-controlled/lock
   // percentages the backend hasn't measured yet would read as a measured fact, not a guess.
   const seg = [
-    liquidity.burnedPct != null ? { label: "Burned / locked", pct: liquidity.burnedPct, hex: "#f5a623" } : null,
+    liquidity.lockedPct != null ? { label: "Locked", pct: liquidity.lockedPct, hex: "#37d67a" } : null,
+    liquidity.burnedPct != null ? { label: "Burned", pct: liquidity.burnedPct, hex: "#f5a623" } : null,
   ].filter((s): s is { label: string; pct: number; hex: string } => s !== null);
 
   return (

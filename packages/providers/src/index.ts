@@ -8,6 +8,7 @@ export * from "./cache.js";
 export * from "./dexscreener.js";
 export * from "./locker.js";
 export * from "./genesis-locker.js";
+export * from "./legacy-genesis-locker.js";
 export * from "./genesispad-registry.js";
 export * from "./robinhood-liquidity.js";
 export * from "./wallet-clustering.js";

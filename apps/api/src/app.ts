@@ -215,8 +215,9 @@ export async function buildApp({
           failedScans,
           webScans: sourceCount("WEB"),
           telegramScans: sourceCount("TELEGRAM"),
-          apiScans: sourceCount("API"),
-          unknownScans: sourceCount("UNKNOWN"),
+          // Pre-attribution requests entered through this HTTP API. Keep them in the API bucket;
+          // only explicitly tagged WEB/TELEGRAM requests are split out.
+          apiScans: sourceCount("API") + sourceCount("UNKNOWN"),
           webActivities: webActivityCount,
           telegramActivities: telegramActivityCount,
           activities: activities.map((event) => ({ at: event.createdAt })),
@@ -229,10 +230,7 @@ export async function buildApp({
             .filter((event) => event.source === "TELEGRAM")
             .map((event) => ({ at: event.createdAt })),
           apiScanEvents: scanEventsBySource
-            .filter((event) => event.source === "API")
-            .map((event) => ({ at: event.createdAt })),
-          unknownScanEvents: scanEventsBySource
-            .filter((event) => event.source === "UNKNOWN")
+            .filter((event) => event.source === "API" || event.source === "UNKNOWN")
             .map((event) => ({ at: event.createdAt })),
           registrations: registrations.map((event) => ({ at: event.createdAt }))
         };

@@ -1419,7 +1419,10 @@ export async function processScanJob(
     const knownInfrastructureAddresses = new Set(
       [
         ...(discoveredPools ?? []).map((pool) => pool.poolAddress.toLowerCase()),
-        ...(providers?.locker.lockerAddress ? [providers.locker.lockerAddress.toLowerCase()] : [])
+        ...(providers?.locker.lockerAddresses?.map((address) => address.toLowerCase()) ??
+          (providers?.locker.lockerAddress
+            ? [providers.locker.lockerAddress.toLowerCase()]
+            : []))
       ]
     );
     const relatedWalletEdges = await buildRelatedWalletEdges({

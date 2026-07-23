@@ -238,8 +238,7 @@ export function createTelegramBot(options: {
           ? [
               ...analytics.webScanEvents,
               ...analytics.telegramScanEvents,
-              ...analytics.apiScanEvents,
-              ...analytics.unknownScanEvents
+              ...analytics.apiScanEvents
             ]
           : analytics.registrations;
     const series = buildTelegramSeries(events, range, analytics.generatedAt, kind === "users");
@@ -275,14 +274,6 @@ export function createTelegramBot(options: {
                 label: "API",
                 values: buildTelegramSeries(analytics.apiScanEvents, range, analytics.generatedAt)
                   .values
-              },
-              {
-                label: "Legacy",
-                values: buildTelegramSeries(
-                  analytics.unknownScanEvents,
-                  range,
-                  analytics.generatedAt
-                ).values
               }
             ]
           : undefined;
@@ -340,7 +331,6 @@ export function createTelegramBot(options: {
         `🌐 Web: <b>${stats.webScans.toLocaleString("en-US")}</b>`,
         `🤖 Telegram: <b>${stats.telegramScans.toLocaleString("en-US")}</b>`,
         `🔌 API: <b>${stats.apiScans.toLocaleString("en-US")}</b>`,
-        `❔ Unknown / legacy: <b>${stats.unknownScans.toLocaleString("en-US")}</b>`,
         "",
         "<b>Activity by source</b>",
         `🌐 Web page views: <b>${stats.webActivities.toLocaleString("en-US")}</b>`,
