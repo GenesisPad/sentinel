@@ -185,6 +185,12 @@ export function createTelegramBot(options: {
   isTokenContract?: TelegramIsTokenContract;
 }) {
   const bot = new Bot(options.token);
+  bot.api.config.use((previous, method, payload, signal) => {
+    if (method === "sendMessage" || method === "editMessageText") {
+      Object.assign(payload, telegramLinkPreviewOptions());
+    }
+    return previous(method, payload, signal);
+  });
   const getSummaryScanResult = options.refreshScanResult ?? options.getScanResult;
   const callbackRegistry: TelegramCallbackRegistry = {
     scanIdsByKey: new Map(),
@@ -777,6 +783,12 @@ export function createTelegramBot(options: {
   }
 
   return bot;
+}
+
+export function telegramLinkPreviewOptions(): {
+  link_preview_options: { is_disabled: true };
+} {
+  return { link_preview_options: { is_disabled: true } };
 }
 
 function isTelegramResultSection(

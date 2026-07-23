@@ -19,12 +19,19 @@ import {
   parseScanAddress,
   resolveChartUrl,
   shouldAutoScanTelegramAddress,
+  telegramLinkPreviewOptions,
   telegramFullReportUrl,
   TELEGRAM_BOT_COMMANDS,
   type TelegramScanLimiter
 } from "./telegram.js";
 
 describe("telegram scan helpers", () => {
+  it("disables link previews globally for bot text messages", () => {
+    expect(telegramLinkPreviewOptions()).toEqual({
+      link_preview_options: { is_disabled: true }
+    });
+  });
+
   it("publishes every supported command with a BotFather-compatible description", () => {
     expect(new Set(TELEGRAM_BOT_COMMANDS.map((item) => item.command)).size).toBe(
       TELEGRAM_BOT_COMMANDS.length
