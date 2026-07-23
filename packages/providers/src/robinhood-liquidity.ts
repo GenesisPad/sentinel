@@ -76,6 +76,26 @@ const uniswapV4InitializeTopic = toEventSelector(uniswapV4InitializeEvent);
 export type QuoteTokenPriceLookup = (address: `0x${string}`) => Promise<number | null>;
 
 /**
+ * Wraps a price lookup so each unique address is fetched at most once for the lifetime of the
+ * returned function, and every concurrent caller for the same address awaits the same in-flight
+ * request rather than firing a duplicate one. Scope a fresh wrapper to each `discoverPools` call
+ * (never share one across scans) so results stay current — this only dedupes the redundant
+ * *concurrent* calls within a single scan, it is not a cross-scan cache.
+ */
+export function memoizeQuoteTokenPriceLookup(lookup: QuoteTokenPriceLookup): QuoteTokenPriceLookup {
+  const cache = new Map<string, Promise<number | null>>();
+  return (address) => {
+    const key = address.toLowerCase();
+    const cached = cache.get(key);
+    if (cached) return cached;
+
+    const promise = lookup(address);
+    cache.set(key, promise);
+    return promise;
+  };
+}
+
+/**
  * Checks the verified Uniswap V2/V3/V4 contracts on Robinhood Chain for pools against a
  * configured set of quote tokens. USD valuation is best-effort via the injected price
  * lookup (normally the Blockscout explorer provider's getTokenPriceUsd) and is left null,
@@ -100,12 +120,28 @@ export function createRobinhoodLiquidityProvider(
         return [];
       }
 
+      // V3 alone probes every (quote token x fee tier) combination in parallel — up to 4 fee
+      // tiers per quote token — so without memoization the SAME quote token's price gets
+      // fetched several times concurrently for one scan. A transient failure or rate-limit on
+      // just one of those otherwise-identical calls then leaves some pools with a real
+      // totalLiquidityUsd and others with null purely by chance, and
+      // selectPrimaryLiquidityPool only ever compares pools that HAVE a number — so the
+      // genuinely largest pool can lose to a dust pool whose lookup happened to succeed.
+      // Verified live against $PONS: the real ~350 ETH ($1.3M) pool's price call failed while a
+      // 5-unit-USDG dust pool's call succeeded, so the dust pool won. Memoizing per scan means
+      // every pool sharing a quote token gets the exact same success-or-failure outcome.
+      const memoizedGetQuoteTokenPriceUsd = memoizeQuoteTokenPriceLookup(getQuoteTokenPriceUsd);
+
       const [v3Pools, v4Pools, v2Pools] = await Promise.all([
-        discoverUniswapV3Liquidity(adapter, tokenAddress, getQuoteTokenPriceUsd).catch(() => []),
+        discoverUniswapV3Liquidity(adapter, tokenAddress, memoizedGetQuoteTokenPriceUsd).catch(() => []),
         discoverUniswapV4Liquidity(adapter, tokenAddress, blockNumber).catch(() => []),
-        discoverUniswapV2Liquidity(adapter, chainId, tokenAddress, getQuoteTokenPriceUsd, locker).catch(
-          () => []
-        )
+        discoverUniswapV2Liquidity(
+          adapter,
+          chainId,
+          tokenAddress,
+          memoizedGetQuoteTokenPriceUsd,
+          locker
+        ).catch(() => [])
       ]);
 
       return [...v3Pools, ...v4Pools, ...v2Pools];

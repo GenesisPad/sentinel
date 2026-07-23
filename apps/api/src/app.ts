@@ -225,6 +225,11 @@ export async function buildApp({ env, logger, scanRepository, scanQueue, apiKeyR
           cooldownMs: env.TELEGRAM_SCAN_COOLDOWN_SECONDS * 1_000,
           burstLimit: env.TELEGRAM_SCAN_BURST_LIMIT,
           burstWindowMs: env.TELEGRAM_SCAN_BURST_WINDOW_SECONDS * 1_000
+        }),
+        groupScanLimiter: createTelegramScanLimiter({
+          cooldownMs: 0,
+          burstLimit: env.TELEGRAM_GROUP_SCAN_BURST_LIMIT,
+          burstWindowMs: env.TELEGRAM_GROUP_SCAN_BURST_WINDOW_SECONDS * 1_000
         })
       })
     : null;

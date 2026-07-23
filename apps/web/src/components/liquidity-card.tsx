@@ -1,4 +1,5 @@
-import { Info } from "lucide-react";
+import { ExternalLink, Info } from "lucide-react";
+import { buildDexScreenerUrl } from "@genesis-sentinel/shared";
 import type { LiquidityInfo } from "@/lib/types";
 import { formatUsd, shortAddress } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
@@ -109,6 +110,17 @@ export function LiquidityCard({ liquidity, technical }: { liquidity: LiquidityIn
           <span>Pool address</span>
           <span className="font-mono text-secondary">{shortAddress(liquidity.poolAddress)}</span>
         </div>
+      ) : null}
+      {liquidity.poolAddress ? (
+        <a
+          href={buildDexScreenerUrl(liquidity.poolAddress)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-border-strong bg-surface-deep px-3 py-2 text-sm font-bold text-primary transition-colors hover:bg-surface"
+        >
+          📈 View Chart
+          <ExternalLink className="size-3.5" aria-hidden />
+        </a>
       ) : null}
     </div>
   );

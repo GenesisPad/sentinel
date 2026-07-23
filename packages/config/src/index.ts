@@ -38,6 +38,12 @@ export const envSchema = z.object({
   TELEGRAM_SCAN_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(86_400).default(0),
   TELEGRAM_SCAN_BURST_LIMIT: z.coerce.number().int().min(1).max(1_000).default(30),
   TELEGRAM_SCAN_BURST_WINDOW_SECONDS: z.coerce.number().int().min(1).max(86_400).default(300),
+  // Aggregate limit for group/supergroup chats, checked in addition to the per-user limit above
+  // — bounds total scan volume a group can generate regardless of how many distinct members are
+  // each individually within their own per-user budget. Higher than the per-user default since
+  // it covers every member of the chat combined, not one person.
+  TELEGRAM_GROUP_SCAN_BURST_LIMIT: z.coerce.number().int().min(1).max(1_000).default(60),
+  TELEGRAM_GROUP_SCAN_BURST_WINDOW_SECONDS: z.coerce.number().int().min(1).max(86_400).default(300),
   SIMULATION_FORK_ENABLED: booleanString,
   SIMULATION_FORK_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
   SIMULATION_FORK_NATIVE_AMOUNT_WEI: z.string().regex(/^\d+$/u).default("1000000000000000"),

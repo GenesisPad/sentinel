@@ -30,6 +30,58 @@ describe("database readiness", () => {
     expect(JSON.stringify(scan)).not.toContain("riskScore");
   });
 
+  it("omits firstScannedAt when it wasn't looked up, rather than guessing", () => {
+    const scan = toScanProgress({
+      id: "scan-1",
+      chainId: 4663,
+      tokenId: null,
+      targetAddress: "0x0000000000000000000000000000000000000001",
+      state: "QUEUED",
+      scannerVersion: "0.1.0-foundation",
+      idempotencyKeyHash: "hash",
+      requestedBy: null,
+      scanBlockNumber: null,
+      scanBlockTimestamp: null,
+      queuedAt: new Date("2026-07-11T00:00:00.000Z"),
+      startedAt: null,
+      completedAt: null,
+      failureSummary: null,
+      createdAt: new Date("2026-07-11T00:00:00.000Z"),
+      updatedAt: new Date("2026-07-11T00:00:00.000Z")
+    });
+
+    expect(scan.firstScannedAt).toBeUndefined();
+  });
+
+  it("includes firstScannedAt when a lookup was performed", () => {
+    const scan = toScanProgress(
+      {
+        id: "scan-2",
+        chainId: 4663,
+        tokenId: null,
+        targetAddress: "0x0000000000000000000000000000000000000001",
+        state: "COMPLETED",
+        scannerVersion: "0.1.0-foundation",
+        idempotencyKeyHash: "hash",
+        requestedBy: null,
+        scanBlockNumber: null,
+        scanBlockTimestamp: null,
+        queuedAt: new Date("2026-07-20T00:00:00.000Z"),
+        startedAt: null,
+        completedAt: new Date("2026-07-20T00:05:00.000Z"),
+        failureSummary: null,
+        createdAt: new Date("2026-07-20T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-20T00:05:00.000Z")
+      },
+      new Date("2026-01-01T00:00:00.000Z")
+    );
+
+    expect(scan.firstScannedAt).toBe("2026-01-01T00:00:00.000Z");
+    // The most recent scan's own timestamps are untouched — first-scanned is a distinct,
+    // separately-sourced fact about the token's whole history, not this specific scan.
+    expect(scan.completedAt).toBe("2026-07-20T00:05:00.000Z");
+  });
+
   it("maps persisted findings and evidence for public scan results", () => {
     const scan = toScanResultView({
       id: "scan-1",

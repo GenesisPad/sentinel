@@ -380,14 +380,16 @@ export function createScanRepository(db: PrismaDatabase): ScanRepository {
         where: { id: scanId },
         include: scanResultInclude
       });
+      if (!scan) {
+        return null;
+      }
 
-      return scan
-        ? toScanResultView(
-            scan,
-            await findLiquidityPools(db, scan.chainId, scan.targetAddress),
-            await findHolderSnapshots(db, scan.chainId, scan.targetAddress)
-          )
-        : null;
+      return toScanResultView(
+        scan,
+        await findLiquidityPools(db, scan.chainId, scan.targetAddress),
+        await findHolderSnapshots(db, scan.chainId, scan.targetAddress),
+        await findFirstTokenScanTimestamp(db, scan.chainId, scan.targetAddress as `0x${string}`)
+      );
     },
 
     async getLatestScanResult(chainId, address) {
@@ -399,7 +401,8 @@ export function createScanRepository(db: PrismaDatabase): ScanRepository {
       return toScanResultView(
         latestScan,
         await findLiquidityPools(db, latestScan.chainId, latestScan.targetAddress),
-        await findHolderSnapshots(db, latestScan.chainId, latestScan.targetAddress)
+        await findHolderSnapshots(db, latestScan.chainId, latestScan.targetAddress),
+        await findFirstTokenScanTimestamp(db, chainId, address)
       );
     },
 
@@ -1427,7 +1430,7 @@ export function createApiKeyRepository(db: PrismaDatabase): ApiKeyRepository {
   };
 }
 
-export function toScanProgress(scan: Scan): ScanProgress {
+export function toScanProgress(scan: Scan, firstScannedAt?: Date | null): ScanProgress {
   const progress: ScanProgress = {
     scanId: scan.id,
     chainId: scan.chainId,
@@ -1449,16 +1452,21 @@ export function toScanProgress(scan: Scan): ScanProgress {
     progress.scanBlockNumber = scan.scanBlockNumber.toString();
   }
 
+  if (firstScannedAt) {
+    progress.firstScannedAt = firstScannedAt.toISOString();
+  }
+
   return progress;
 }
 
 export function toScanResultView(
   scan: ScanResultRecord,
   liquidityPools: LiquidityPoolRecord[] = [],
-  holderSnapshots: HolderSnapshotRecord[] = []
+  holderSnapshots: HolderSnapshotRecord[] = [],
+  firstScannedAt?: Date | null
 ): ScanResultView {
   return {
-    scan: toScanProgress(scan),
+    scan: toScanProgress(scan, firstScannedAt),
     token: toTokenProfileView(scan),
     detectorChecks: scan.detectorResults.flatMap(toDetectorCheckViews),
     findings: scan.findings.map(toSecurityFindingView),
@@ -1760,6 +1768,34 @@ async function findLatestTokenScan(
       queuedAt: "desc"
     }
   });
+}
+
+/**
+ * The earliest scan ever recorded for this token (across every scan, not just completed ones —
+ * a token that has only ever failed or been queued still has a real "first seen" moment). A
+ * lightweight `select`-only query, not the full `scanResultInclude` join, since only the
+ * timestamp is needed here.
+ */
+async function findFirstTokenScanTimestamp(
+  db: PrismaDatabase,
+  chainId: number,
+  address: `0x${string}`
+): Promise<Date | null> {
+  const earliest = await db.scan.findFirst({
+    where: {
+      chainId,
+      targetAddress: normalizeEvmAddress(address)
+    },
+    orderBy: {
+      queuedAt: "asc"
+    },
+    select: {
+      queuedAt: true,
+      completedAt: true
+    }
+  });
+
+  return earliest?.completedAt ?? earliest?.queuedAt ?? null;
 }
 
 type LiquidityPoolRecord = Awaited<ReturnType<typeof findLiquidityPools>>[number];

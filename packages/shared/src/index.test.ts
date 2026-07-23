@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   assertRiskScore,
+  buildDexScreenerUrl,
   buildTokenSecuritySummary,
   createHealth,
   createScanId,
+  formatCompactUsd,
+  formatHumanDateTime,
   liquidityHealthTier,
   normalizeEvmAddress,
   scannerVersion,
@@ -51,6 +54,57 @@ describe("liquidityHealthTier", () => {
   it("applies stricter thresholds to an ultra-low-cap token than a $5M+ token", () => {
     expect(liquidityHealthTier(12_000, 15, 80_000)).toBe("medium");
     expect(liquidityHealthTier(750_000, 15, 10_000_000)).toBe("healthy");
+  });
+});
+
+describe("formatCompactUsd", () => {
+  it("abbreviates millions and thousands instead of printing every digit", () => {
+    expect(formatCompactUsd(25_000_000)).toBe("$25m");
+    expect(formatCompactUsd(50_500)).toBe("$50.5k");
+  });
+
+  it("abbreviates billions", () => {
+    expect(formatCompactUsd(1_250_000_000)).toBe("$1.25b");
+  });
+
+  it("uses ordinary currency formatting under $1,000", () => {
+    expect(formatCompactUsd(123.45)).toBe("$123.45");
+  });
+
+  it("keeps extra precision for sub-dollar values instead of rounding them to $0", () => {
+    expect(formatCompactUsd(0.0000005)).toBe("$0.0000005");
+  });
+
+  it("handles zero and negative values", () => {
+    expect(formatCompactUsd(0)).toBe("$0");
+    expect(formatCompactUsd(-25_000_000)).toBe("-$25m");
+  });
+
+  it("parses numeric strings and returns null for unusable input", () => {
+    expect(formatCompactUsd("25000000")).toBe("$25m");
+    expect(formatCompactUsd(null)).toBeNull();
+    expect(formatCompactUsd(undefined)).toBeNull();
+    expect(formatCompactUsd("not-a-number")).toBeNull();
+  });
+});
+
+describe("formatHumanDateTime", () => {
+  it("formats an ISO timestamp as a human-readable absolute date and time", () => {
+    expect(formatHumanDateTime("2026-07-23T01:28:00.000Z")).toBe("Jul 23, 2026, 1:28 AM UTC");
+  });
+
+  it("returns null for missing or invalid input instead of a raw string", () => {
+    expect(formatHumanDateTime(null)).toBeNull();
+    expect(formatHumanDateTime(undefined)).toBeNull();
+    expect(formatHumanDateTime("not-a-date")).toBeNull();
+  });
+});
+
+describe("buildDexScreenerUrl", () => {
+  it("builds a Robinhood Chain DexScreener pair URL", () => {
+    expect(buildDexScreenerUrl("0x10cc6bd38112cac182db90b6a71d8bb5939526ba")).toBe(
+      "https://dexscreener.com/robinhood/0x10cc6bd38112cac182db90b6a71d8bb5939526ba"
+    );
   });
 });
 

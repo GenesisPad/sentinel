@@ -1,20 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { ScanProgress, ScanResultView } from "@genesis-sentinel/shared";
 import {
-  createTelegramScanLimiter,
+  checkTelegramRateLimit,
   createTelegramCallbackKey,
   createTelegramResultKeyboard,
+  createTelegramScanLimiter,
+  createTelegramSectionKeyboard,
+  formatScanStageMessage,
   formatTelegramProgressReply,
   formatTelegramRateLimitReply,
   formatTelegramResultReply,
   formatTelegramSectionReply,
-  formatTelegramScanReply,
   formatTelegramTrackedListReply,
-  formatTelegramTrackReply,
   formatTelegramUntrackReply,
+  friendlyScanState,
   parseCommandArgument,
   parseScanAddress,
-  telegramFullReportUrl
+  resolveChartUrl,
+  telegramFullReportUrl,
+  type TelegramScanLimiter
 } from "./telegram.js";
 
 describe("telegram scan helpers", () => {
@@ -83,45 +87,7 @@ describe("telegram scan helpers", () => {
     expect(callbackData.every((value) => value.length <= 64)).toBe(true);
   });
 
-  it("formats scan replies without safety guarantees", () => {
-    const scan: ScanProgress = {
-      scanId: "scan-1",
-      chainId: 4663,
-      address: "0x0000000000000000000000000000000000000001",
-      state: "QUEUED",
-      scannerVersion: "0.1.0-foundation",
-      submittedAt: "2026-07-11T00:00:00.000Z",
-      message: "Scan is queued."
-    };
-
-    const reply = formatTelegramScanReply(scan);
-
-    expect(reply).toContain("0x0000000000000000000000000000000000000001");
-    expect(reply).toContain("Use the buttons below");
-    expect(reply).toContain("risk indicators, not guarantees");
-    expect(reply.toLowerCase()).not.toContain("safe");
-  });
-
-  it("formats scan replies with CA tracking context", () => {
-    const scan: ScanProgress = {
-      scanId: "scan-1",
-      chainId: 4663,
-      address: "0x0000000000000000000000000000000000000001",
-      state: "QUEUED",
-      scannerVersion: "0.1.0-foundation",
-      submittedAt: "2026-07-11T00:00:00.000Z",
-      message: "Scan is queued."
-    };
-
-    expect(formatTelegramScanReply(scan, { tracking: { created: true } })).toContain(
-      "Tracking: added this CA to the chat watchlist."
-    );
-    expect(formatTelegramScanReply(scan, { tracking: { created: false } })).toContain(
-      "already on the chat watchlist"
-    );
-  });
-
-  it("formats progress replies with scan state and message", () => {
+  it("formats progress replies with a friendly scan state, never the raw enum string", () => {
     const scan: ScanProgress = {
       scanId: "scan-1",
       chainId: 4663,
@@ -135,36 +101,57 @@ describe("telegram scan helpers", () => {
 
     const reply = formatTelegramProgressReply(scan);
 
-    // Escaped: legacy Telegram Markdown treats a raw underscore as an italic delimiter, and
-    // ANALYZING_CONTRACT's underscore would otherwise break entity parsing.
-    expect(reply).toContain("State: ANALYZING\\_CONTRACT");
+    expect(reply).toContain("State: 🔬 Analyzing contract");
+    // Only the dedicated State line is asserted here — scan.message is a separate, distinct
+    // free-text field from the backend and may legitimately still describe the raw state in its
+    // own sentence (escaped, so it can't break Markdown parsing either way).
+    const stateLine = reply.split("\n").find((line) => line.startsWith("State:"));
+    expect(stateLine).not.toContain("ANALYZING_CONTRACT");
+    expect(stateLine).not.toContain("ANALYZING\\_CONTRACT");
     expect(reply).toContain("Block: 123");
   });
 
-  it("formats CA tracking replies", () => {
+  it("formats a completed timestamp as a human-readable date, not a raw ISO string", () => {
     const scan: ScanProgress = {
       scanId: "scan-1",
       chainId: 4663,
       address: "0x0000000000000000000000000000000000000001",
-      state: "QUEUED",
+      state: "COMPLETED",
       scannerVersion: "0.1.0-foundation",
       submittedAt: "2026-07-11T00:00:00.000Z",
-      message: "Scan is queued."
+      completedAt: "2026-07-23T01:28:00.000Z",
+      message: "Scan state is COMPLETED."
     };
 
-    const trackReply = formatTelegramTrackReply(
-      {
-        created: true,
-        item: {
-          chainId: 4663,
-          address: "0x0000000000000000000000000000000000000001",
-          createdAt: "2026-07-11T00:00:00.000Z"
-        }
-      },
-      scan
-    );
+    const reply = formatTelegramProgressReply(scan);
 
-    expect(trackReply).toContain("Tracking enabled");
+    expect(reply).toContain("Completed: Jul 23, 2026, 1:28 AM UTC");
+    expect(reply).not.toContain("2026-07-23T01:28:00.000Z");
+  });
+
+  it("maps every backend scan state to a friendly label, never the raw enum", () => {
+    expect(friendlyScanState("PARTIALLY_COMPLETED")).not.toContain("PARTIALLY_COMPLETED");
+    expect(friendlyScanState("PARTIALLY_COMPLETED")).toContain("Complete");
+    expect(friendlyScanState("FAILED")).toContain("Failed");
+    expect(friendlyScanState("QUEUED")).toContain("Queued");
+    // An unrecognized state still returns something rather than throwing.
+    expect(friendlyScanState("SOMETHING_NEW")).toBe("SOMETHING_NEW");
+  });
+
+  it("formats a per-stage progress message keyed to the real backend state", () => {
+    expect(formatScanStageMessage("ANALYZING_CONTRACT", null)).toContain("Analyzing contract");
+    expect(formatScanStageMessage("SIMULATING_TRADES", null)).toContain("Simulating buy/sell");
+  });
+
+  it("folds a tracking confirmation into the first stage message only when provided", () => {
+    const withTracking = formatScanStageMessage("QUEUED", "added this CA to the chat watchlist.");
+    expect(withTracking).toContain("added this CA to the chat watchlist");
+
+    const withoutTracking = formatScanStageMessage("QUEUED", null);
+    expect(withoutTracking).not.toContain("watchlist");
+  });
+
+  it("formats CA tracking replies", () => {
     expect(
       formatTelegramUntrackReply("0x0000000000000000000000000000000000000001", true)
     ).toContain("Stopped tracking");
@@ -267,21 +254,21 @@ describe("telegram scan helpers", () => {
     expect(reply).not.toContain("Not simulated yet");
     expect(reply).toContain("Mint capability surface detected");
     expect(reply.toLowerCase()).not.toContain("safe");
-    // No fabricated fields — everything the backend hasn't produced reads as unknown, never a guess.
-    expect(reply).not.toContain("Unknown");
+    // Never the raw backend state string, per the friendly-state mapping.
+    expect(reply).not.toContain("PARTIALLY_COMPLETED");
     expect(reply).not.toContain("N/A");
     expect(reply).not.toContain("KYC");
     expect(reply).not.toContain("Votes");
     expect(reply).not.toContain("Launch MC");
   });
 
-  it("shortens addresses with plain ASCII, never a character that can break Telegram's Markdown parser", () => {
+  it("shortens addresses with plain ASCII inside the code span, never a character that can break Telegram's Markdown parser", () => {
     // Reproduces a real production outage: shortenAddress used a mis-encoded "…" that produced
     // a garbled multi-byte sequence inside a Markdown code span. Telegram's parser choked on it
     // ("can't parse entities: Can't find end of the entity..."), so every single reply — /scan,
     // pasted addresses, /result, refresh — failed with a 500 and the bot went completely silent.
-    // Any report containing a deployer/owner address reproduces this, so a full report (not just
-    // the shortening helper in isolation) is asserted here.
+    // The line itself may legitimately contain an emoji label (e.g. "🏗️ Deployer:") — only the
+    // backtick-delimited address span is what must stay 7-bit ASCII.
     const result: ScanResultView = {
       scan: {
         scanId: "scan-4",
@@ -321,20 +308,18 @@ describe("telegram scan helpers", () => {
     const reply = formatTelegramResultReply(result);
 
     expect(reply).toContain("Deployer: `0x8cfa...b561`");
-    // The bug was specific to the shortened-address code span, not the whole message (which
-    // legitimately contains emoji elsewhere for risk indicators) — assert that span is 7-bit
-    // ASCII rather than the whole reply.
-    const deployerLine = reply.split("\n").find((line) => line.startsWith("Deployer:"));
-    expect(deployerLine && /^[\x00-\x7F]*$/.test(deployerLine)).toBe(true);
+    const deployerLine = reply.split("\n").find((line) => line.includes("Deployer:"));
+    const codeSpan = deployerLine?.match(/`([^`]*)`/u)?.[1];
+    expect(codeSpan).toBe("0x8cfa...b561");
+    expect(codeSpan && /^[\x00-\x7F]*$/.test(codeSpan)).toBe(true);
   });
 
-  it("escapes underscores in scan-state and risk-level enum values, never breaking Telegram's Markdown parser", () => {
-    // Reproduces a third production outage found in the same file as the ellipsis and emoji
-    // mojibake bugs: scan states like PARTIALLY_COMPLETED and risk levels like UNABLE_TO_ASSESS
-    // contain literal underscores, which legacy Telegram Markdown treats as unescaped italic
-    // delimiters. An odd total count of unescaped underscores across the whole message breaks
-    // parsing ("can't parse entities: Can't find end of the entity...") for every reply, exactly
-    // like the two bugs fixed above it. These values must go through escapeMarkdown().
+  it("escapes underscores in risk-level enum values, never breaking Telegram's Markdown parser", () => {
+    // Reproduces a production outage found alongside the ellipsis and emoji mojibake bugs: risk
+    // levels like UNABLE_TO_ASSESS contain literal underscores, which legacy Telegram Markdown
+    // treats as unescaped italic delimiters. These values must go through escapeMarkdown(). Scan
+    // state no longer renders as a raw enum at all (friendlyScanState replaced it entirely), so
+    // that half of the original bug can no longer occur by construction.
     const result: ScanResultView = {
       scan: {
         scanId: "scan-5",
@@ -373,7 +358,6 @@ describe("telegram scan helpers", () => {
     const reply = formatTelegramResultReply(result);
 
     expect(reply).toContain("UNABLE\\_TO\\_ASSESS");
-    expect(reply).toContain("PARTIALLY\\_COMPLETED");
     // Legacy Markdown entities must be balanced: every unescaped _, *, ` must pair up, or
     // Telegram's parser rejects the whole message and the bot goes silent.
     for (const marker of ["_", "*", "`"]) {
@@ -451,6 +435,66 @@ describe("telegram scan helpers", () => {
     expect(reply).toContain("Dex: Paid");
   });
 
+  it("resolves a DexScreener chart URL from the highest-liquidity pool, or undefined when none exist", () => {
+    const withPools: ScanResultView["liquidity"] = {
+      status: "AVAILABLE",
+      message: "ok",
+      pools: [
+        {
+          chainId: 4663,
+          tokenAddress: "0x0000000000000000000000000000000000000002",
+          poolAddress: "0x0000000000000000000000000000000000000010",
+          liquidityData: { totalLiquidityUsd: 100 }
+        },
+        {
+          chainId: 4663,
+          tokenAddress: "0x0000000000000000000000000000000000000002",
+          poolAddress: "0x10cc6bd38112cac182db90b6a71d8bb5939526ba",
+          liquidityData: { totalLiquidityUsd: 1_348_082 }
+        }
+      ]
+    };
+
+    const withResult = (liquidity: ScanResultView["liquidity"]): ScanResultView => ({
+      scan: {
+        scanId: "scan-chart",
+        chainId: 4663,
+        address: "0x0000000000000000000000000000000000000002",
+        state: "COMPLETED",
+        scannerVersion: "0.1.0-foundation",
+        submittedAt: "2026-07-19T00:00:00.000Z",
+        message: "ok"
+      },
+      token: { chainId: 4663, address: "0x0000000000000000000000000000000000000002" },
+      detectorChecks: [],
+      findings: [],
+      liquidity,
+      holders: { status: "UNSUPPORTED", snapshots: [], message: "n/a" },
+      simulations: [],
+      risk: {
+        chainId: 4663,
+        address: "0x0000000000000000000000000000000000000002",
+        scannerVersion: "0.1.0-foundation",
+        status: "UNABLE_TO_ASSESS",
+        level: "UNABLE_TO_ASSESS",
+        score: null,
+        confidence: "LOW",
+        categoryScores: [],
+        findingContributions: [],
+        unableToAssessReasons: [],
+        findingCounts: { INFO: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 },
+        message: "n/a"
+      }
+    });
+
+    expect(resolveChartUrl(withResult(withPools))).toBe(
+      "https://dexscreener.com/robinhood/0x10cc6bd38112cac182db90b6a71d8bb5939526ba"
+    );
+    expect(
+      resolveChartUrl(withResult({ status: "UNSUPPORTED", pools: [], message: "n/a" }))
+    ).toBeUndefined();
+  });
+
   it("adds a Full Report button linking to the web app when webAppUrl is configured", () => {
     const result: ScanResultView = {
       scan: {
@@ -487,10 +531,53 @@ describe("telegram scan helpers", () => {
     const url = telegramFullReportUrl("https://sentinel.genesispad.app/", result);
     expect(url).toBe(`https://sentinel.genesispad.app/token/robinhood/${result.scan.address}`);
 
-    const keyboard = createTelegramResultKeyboard("shortkey", url);
+    const keyboard = createTelegramResultKeyboard("shortkey", undefined, url);
     const flat = keyboard.inline_keyboard.flat();
-    const fullReportButton = flat.find((button) => button.text === "Full Report");
+    const fullReportButton = flat.find((button) => button.text === "🔗 Full Report");
     expect(fullReportButton && "url" in fullReportButton ? fullReportButton.url : undefined).toBe(url);
+  });
+
+  it("omits the Taxes button (tax figures are already in the main summary) and includes emoji-labeled buttons", () => {
+    const keyboard = createTelegramResultKeyboard("shortkey");
+    const flat = keyboard.inline_keyboard.flat();
+    const labels = flat.map((button) => button.text);
+
+    expect(labels.some((label) => label.toLowerCase().includes("tax"))).toBe(false);
+    expect(labels).toContain("📊 Controls");
+    expect(labels).toContain("👥 Holders");
+    expect(labels).toContain("🕸️ Dev Cluster");
+    expect(labels).toContain("🔄 Refresh");
+  });
+
+  it("adds a working Chart button only when a chart URL is available", () => {
+    const withChart = createTelegramResultKeyboard(
+      "shortkey",
+      "https://dexscreener.com/robinhood/0x10cc6bd38112cac182db90b6a71d8bb5939526ba"
+    );
+    const chartButton = withChart.inline_keyboard
+      .flat()
+      .find((button) => button.text === "📈 Chart");
+    expect(chartButton && "url" in chartButton ? chartButton.url : undefined).toBe(
+      "https://dexscreener.com/robinhood/0x10cc6bd38112cac182db90b6a71d8bb5939526ba"
+    );
+
+    const withoutChart = createTelegramResultKeyboard("shortkey");
+    expect(withoutChart.inline_keyboard.flat().some((button) => button.text === "📈 Chart")).toBe(
+      false
+    );
+  });
+
+  it("gives section views a Back button that returns to the summary, plus Refresh", () => {
+    const keyboard = createTelegramSectionKeyboard("shortkey");
+    const flat = keyboard.inline_keyboard.flat();
+    const labels = flat.map((button) => button.text);
+
+    expect(labels).toContain("◀️ Back");
+    expect(labels).toContain("🔄 Refresh");
+    const backButton = flat.find((button) => button.text === "◀️ Back");
+    expect(backButton && "callback_data" in backButton ? backButton.callback_data : undefined).toBe(
+      "back:shortkey"
+    );
   });
 
   it("formats Telegram report sections", () => {
@@ -556,11 +643,39 @@ describe("telegram scan helpers", () => {
       }
     };
 
-    expect(formatTelegramSectionReply("holders", result)).toContain("37.1%");
-    expect(formatTelegramSectionReply("taxes", result)).toContain("No measured tax values were returned");
-    expect(formatTelegramSectionReply("chart", result)).toContain(
-      "Chart links are not configured yet"
-    );
+    const reply = formatTelegramSectionReply("holders", result);
+    expect(reply).toContain("37.1%");
+    expect(reply).toContain("*Total holders:* 100");
+  });
+
+  it("bounds per-user and per-group scan rates independently", () => {
+    const scanLimiter: TelegramScanLimiter = {
+      check: (key) => (key.includes("user:1") ? { allowed: false, retryAfterSeconds: 9 } : { allowed: true })
+    };
+    const groupScanLimiter: TelegramScanLimiter = {
+      check: () => ({ allowed: false, retryAfterSeconds: 20 })
+    };
+
+    // A per-user violation is reported even in a private chat, where the group limiter never runs.
+    const privateChat = { id: 1, type: "private" };
+    expect(checkTelegramRateLimit(scanLimiter, groupScanLimiter, privateChat, 1)).toEqual({
+      allowed: false,
+      retryAfterSeconds: 9
+    });
+
+    // A different, not-individually-limited user in a group still gets blocked by the aggregate
+    // group-wide limit — this is the whole point of a separate group limiter.
+    const groupChat = { id: 2, type: "supergroup" };
+    expect(checkTelegramRateLimit(scanLimiter, groupScanLimiter, groupChat, 2)).toEqual({
+      allowed: false,
+      retryAfterSeconds: 20
+    });
+
+    // The same not-individually-limited user in a private chat is unaffected by the group
+    // limiter, since it is never consulted outside group/supergroup chats.
+    expect(checkTelegramRateLimit(scanLimiter, groupScanLimiter, { id: 3, type: "private" }, 2)).toEqual({
+      allowed: true
+    });
   });
 });
 
@@ -700,6 +815,64 @@ describe("telegram report informativeness", () => {
     expect(reply).toMatch(/B 79\.5% ⚠️/u);
     // A normal 0% sell tax should stay unmarked.
     expect(reply).not.toMatch(/S 0\.0% ⚠️/u);
+  });
+
+  it("abbreviates market cap and volume instead of printing every digit", () => {
+    const reply = formatTelegramResultReply(
+      baseResult({
+        token: {
+          ...baseResult().token,
+          marketCapUsd: "25000000",
+          volume24hUsd: "50500"
+        }
+      })
+    );
+
+    expect(reply).toContain("MCap: $25m");
+    expect(reply).toContain("Vol 24h: $50.5k");
+    expect(reply).not.toContain("$25,000,000");
+    expect(reply).not.toContain("$50,500");
+  });
+
+  it("shows a human-readable scanned-at date instead of a raw ISO timestamp", () => {
+    const reply = formatTelegramResultReply(
+      baseResult({
+        scan: { ...baseResult().scan, completedAt: "2026-07-23T01:28:00.000Z" }
+      })
+    );
+
+    expect(reply).toContain("Scanned: Jul 23, 2026, 1:28 AM UTC");
+    expect(reply).not.toContain("2026-07-23T01:28:00.000Z");
+  });
+
+  it("shows both first- and last-scanned dates when they differ", () => {
+    const reply = formatTelegramResultReply(
+      baseResult({
+        scan: {
+          ...baseResult().scan,
+          completedAt: "2026-07-23T01:28:00.000Z",
+          firstScannedAt: "2026-01-01T00:00:00.000Z"
+        }
+      })
+    );
+
+    expect(reply).toContain("First scanned: Jan 1, 2026, 12:00 AM UTC");
+    expect(reply).toContain("Last scanned: Jul 23, 2026, 1:28 AM UTC");
+  });
+
+  it("shows a single scanned-at line when this is the token's first scan", () => {
+    const reply = formatTelegramResultReply(
+      baseResult({
+        scan: {
+          ...baseResult().scan,
+          completedAt: "2026-07-23T01:28:00.000Z",
+          firstScannedAt: "2026-07-23T01:28:00.000Z"
+        }
+      })
+    );
+
+    expect(reply).toContain("🕒 Scanned: Jul 23, 2026, 1:28 AM UTC");
+    expect(reply).not.toContain("First scanned");
   });
 
   it("renders a dev cluster section with per-wallet holdings", () => {

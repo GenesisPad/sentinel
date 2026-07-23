@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { formatCompactUsd } from "@genesis-sentinel/shared";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -16,13 +17,10 @@ export function bpsToPct(bps?: number | null): string {
   return `${(bps / 100).toFixed(1)}%`;
 }
 
+/** k/m/b-abbreviated ("$25m", "$50.5k") via the shared formatter also used by the Telegram bot,
+ * so the same figure never reads two different ways across the two surfaces. */
 export function formatUsd(value?: number | null): string {
-  if (value == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
+  return formatCompactUsd(value) ?? "—";
 }
 
 export function formatNumber(value?: number | string | null): string {

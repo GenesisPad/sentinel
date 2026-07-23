@@ -553,6 +553,7 @@ export function mapResultToReport(view: ScanResultView): ScanReport {
     block: view.scan.scanBlockNumber ? Number(view.scan.scanBlockNumber) : null,
     dataSource: `${chainByNumericId(view.scan.chainId)?.label ?? "Chain"} RPC`,
     scannedAt: view.scan.completedAt ?? view.scan.submittedAt,
+    ...(view.scan.firstScannedAt ? { firstScannedAt: view.scan.firstScannedAt } : {}),
     incomplete: buildIncomplete(view),
     // Defensive: the type says required, but a currently-deployed backend that predates this
     // field will omit it entirely — don't let older/newer deployment skew crash the page.

@@ -226,6 +226,9 @@ export interface ScanReport {
   block: number | null;
   dataSource: string;
   scannedAt: string;
+  /** When this token was first ever scanned (across all scans, not just this one). Undefined
+   * only when the lookup wasn't performed, never a guess. */
+  firstScannedAt?: string;
   /** Set when this payload is served from cache. */
   cachedAt?: string;
   /** Present on partial reports: human-readable list of what could not complete. */

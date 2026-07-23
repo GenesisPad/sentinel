@@ -169,6 +169,9 @@ export interface ScanProgress {
   message: string;
   scanBlockNumber?: string;
   completedAt?: string;
+  /** When this token was first ever scanned (across all scans for this chainId+address, not
+   * just this one) — undefined only when the lookup wasn't performed, never a guess. */
+  firstScannedAt?: string;
 }
 
 export interface FindingEvidenceView {
@@ -1320,4 +1323,68 @@ export function liquidityHealthTier(
   if (quoteSidePctOfMarketCap >= bracket.healthyPct) return "healthy";
   if (quoteSidePctOfMarketCap >= bracket.mediumPct) return "medium";
   return "low";
+}
+
+function trimTrailingZero(value: string): string {
+  return value.replace(/\.?0+$/u, "");
+}
+
+/**
+ * Formats a USD amount with k/m/b suffixes ("$25m", "$50.5k") instead of a full comma-separated
+ * number ("$25,000,000", "$50,500") — matches how these figures are actually said out loud, and
+ * keeps market cap/volume readable in a compact chat message or card. Shared by the web app and
+ * the Telegram bot so the two surfaces never drift into showing the same number two different
+ * ways. Values under $1,000 use ordinary currency formatting (with extra precision below $1,
+ * where a whole-dollar rounding would erase the only digits that matter) since abbreviating a
+ * three-digit number saves no space and loses information.
+ */
+export function formatCompactUsd(value: number | string | null | undefined): string | null {
+  if (value == null) return null;
+  const numeric = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(numeric)) return null;
+  if (numeric === 0) return "$0";
+
+  const sign = numeric < 0 ? "-" : "";
+  const abs = Math.abs(numeric);
+
+  if (abs >= 1_000_000_000) return `${sign}$${trimTrailingZero((abs / 1_000_000_000).toFixed(2))}b`;
+  if (abs >= 1_000_000) return `${sign}$${trimTrailingZero((abs / 1_000_000).toFixed(2))}m`;
+  if (abs >= 1_000) return `${sign}$${trimTrailingZero((abs / 1_000).toFixed(2))}k`;
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: abs < 1 ? 8 : 2
+  }).format(numeric);
+}
+
+/**
+ * A human-readable absolute date/time ("Jul 23, 2026, 1:28 AM UTC") instead of a raw ISO
+ * timestamp. Fixed to UTC and labeled as such — the Telegram bot has no reliable per-user
+ * timezone to convert to, and a labeled, consistent timezone beats a technically-local one that
+ * silently disagrees with the timestamp another user in the same chat sees.
+ */
+export function formatHumanDateTime(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "UTC",
+    timeZoneName: "short"
+  }).format(date);
+}
+
+/** Robinhood Chain is the only chain implemented end-to-end today (see telegramFullReportUrl and
+ * every other Robinhood-only assumption already baked into this package) — safe to hardcode
+ * DexScreener's "robinhood" network slug rather than needing a numeric-to-slug chain registry
+ * just for this one link. */
+export function buildDexScreenerUrl(pairAddress: string): string {
+  return `https://dexscreener.com/robinhood/${pairAddress}`;
 }

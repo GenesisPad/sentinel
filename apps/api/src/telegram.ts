@@ -6,7 +6,10 @@ import type {
   TrackTelegramAddressInput
 } from "@genesis-sentinel/database";
 import {
+  buildDexScreenerUrl,
   buildTokenSecuritySummary,
+  formatCompactUsd,
+  formatHumanDateTime,
   liquidityHealthTier,
   selectPrimaryLiquidityPool,
   type LiquidityHealthTier,
@@ -33,6 +36,54 @@ export type TelegramListTrackedAddresses = (
 
 const addressPattern = /0x[a-fA-F0-9]{40}/;
 const terminalScanStates = new Set(["COMPLETED", "PARTIALLY_COMPLETED", "FAILED"]);
+
+/** Maps the raw backend scan state to a friendly, emoji'd label — never shown to a user as the
+ * raw enum string (e.g. "PARTIALLY_COMPLETED"), which reads as an internal implementation
+ * detail rather than useful information. */
+const FRIENDLY_SCAN_STATE: Record<string, string> = {
+  QUEUED: "🕓 Queued",
+  RESOLVING_CHAIN: "🔗 Resolving chain",
+  FETCHING_CONTRACT: "📄 Fetching contract",
+  ANALYZING_CONTRACT: "🔬 Analyzing contract",
+  DISCOVERING_MARKETS: "💧 Discovering markets",
+  ANALYZING_HOLDERS: "👥 Analyzing holders",
+  SIMULATING_TRADES: "🔁 Simulating trades",
+  SCORING: "🧮 Scoring",
+  COMPLETED: "✅ Complete",
+  PARTIALLY_COMPLETED: "✅ Complete (partial data)",
+  FAILED: "❌ Failed"
+};
+
+export function friendlyScanState(state: string): string {
+  return FRIENDLY_SCAN_STATE[state] ?? state;
+}
+
+/** Per-stage progress copy shown while a scan runs, keyed to the backend's real state so the
+ * animation reflects actual progress rather than a guessed fixed timer. */
+const SCAN_STAGE_MESSAGE: Record<string, string> = {
+  QUEUED: "🕓 *Queued*\nWaiting for a worker to pick this scan up...",
+  RESOLVING_CHAIN: "🔗 *Resolving chain...*",
+  FETCHING_CONTRACT: "📄 *Fetching contract...*\nReading bytecode & metadata.",
+  ANALYZING_CONTRACT: "🔬 *Analyzing contract & checking controls...*",
+  DISCOVERING_MARKETS: "💧 *Checking liquidity pools...*",
+  ANALYZING_HOLDERS: "👥 *Running holders analysis...*",
+  SIMULATING_TRADES: "🔁 *Simulating buy/sell trades...*",
+  SCORING: "🧮 *Finalizing risk score...*"
+};
+
+export function formatScanStageMessage(state: string, trackingLine: string | null): string {
+  const stage = SCAN_STAGE_MESSAGE[state] ?? `${friendlyScanState(state)}...`;
+  return trackingLine ? `${stage}\n\n_${escapeMarkdown(trackingLine)}_` : stage;
+}
+
+/** Resolves the best DexScreener chart link for a scan result — the highest-liquidity pool,
+ * same selection rule readLiquidityData uses, so the Chart button never points at a near-dust
+ * pool when a real one exists. Undefined (not a broken link) when no pool has been discovered
+ * yet, so the button can be omitted entirely. */
+export function resolveChartUrl(result: ScanResultView): string | undefined {
+  const pool = selectPrimaryLiquidityPool(result.liquidity.pools);
+  return pool ? buildDexScreenerUrl(pool.poolAddress) : undefined;
+}
 
 type TelegramChatLike = {
   id: number | bigint;
@@ -66,7 +117,12 @@ export function createTelegramBot(options: {
   trackAddress?: TelegramTrackAddress;
   untrackAddress?: TelegramUntrackAddress;
   listTrackedAddresses?: TelegramListTrackedAddresses;
+  /** Per chat+user cooldown/burst limit — bounds any single member's request rate. */
   scanLimiter?: TelegramScanLimiter;
+  /** Aggregate per-chat limit, checked in addition to `scanLimiter` in group/supergroup chats
+   * only — bounds total scan volume a group can generate regardless of how many distinct
+   * members are each individually within their own per-user budget. */
+  groupScanLimiter?: TelegramScanLimiter;
 }) {
   const bot = new Bot(options.token);
   const callbackRegistry: TelegramCallbackRegistry = {
@@ -77,29 +133,30 @@ export function createTelegramBot(options: {
   bot.command("start", async (context) => {
     await context.reply(
       [
-        "Genesis Sentinel scans Robinhood Chain token contracts and reports persisted evidence-backed findings.",
+        "🛡️ Genesis Sentinel scans Robinhood Chain token contracts and reports persisted evidence-backed findings.",
         "",
-        "Commands:",
-        "/scan <contract address>",
-        "/status <scan id>",
-        "/result <scan id>",
-        "/track <contract address>",
-        "/tracked",
-        "/untrack <contract address>"
-      ].join("\n")
+        "*Commands:*",
+        "🔍 /scan <contract address>",
+        "🔎 /status <scan id>",
+        "📋 /result <scan id>",
+        "⭐ /track <contract address>",
+        "📌 /tracked",
+        "🗑️ /untrack <contract address>"
+      ].join("\n"),
+      { parse_mode: "Markdown" }
     );
   });
 
   bot.command("help", async (context) => {
     await context.reply(
       [
-        "Send /scan <contract address> or paste a contract address.",
-        "Use /status <scan id> to check progress.",
-        "Use /result <scan id> to summarize persisted findings.",
-        "Use /track <contract address> to save a CA for this chat.",
-        "Use /tracked to list saved CAs.",
-        "Use /untrack <contract address> to remove one.",
-        "Reports are risk indicators, not guarantees."
+        "🔍 Send /scan <contract address> or paste a contract address.",
+        "🔎 Use /status <scan id> to check progress.",
+        "📋 Use /result <scan id> to summarize persisted findings.",
+        "⭐ Use /track <contract address> to save a CA for this chat.",
+        "📌 Use /tracked to list saved CAs.",
+        "🗑️ Use /untrack <contract address> to remove one.",
+        "⚠️ Reports are risk indicators, not guarantees."
       ].join("\n")
     );
   });
@@ -107,79 +164,74 @@ export function createTelegramBot(options: {
   bot.command("scan", async (context) => {
     const address = parseScanAddress(context.message?.text ?? "");
     if (!address) {
-      await context.reply("Send /scan followed by a valid EVM contract address.");
+      await context.reply("⚠️ Send /scan followed by a valid EVM contract address.");
       return;
     }
+    if (!context.chat) return;
 
-    const limit = options.scanLimiter?.check(
-      createTelegramRateLimitKey(context.chat?.id, context.from?.id)
+    const limit = checkTelegramRateLimit(
+      options.scanLimiter,
+      options.groupScanLimiter,
+      context.chat,
+      context.from?.id
     );
-    if (limit && !limit.allowed) {
+    if (!limit.allowed) {
       await context.reply(formatTelegramRateLimitReply(limit.retryAfterSeconds));
       return;
     }
 
     await submitScanAndReply({
       address,
-      chatId: context.chat?.id,
+      chatId: context.chat.id,
       fromId: context.from?.id,
-      telegramChat: context.chat,
-      reply: (text, keyboard) =>
-        context.reply(text, {
-          parse_mode: "Markdown",
-          ...(keyboard ? { reply_markup: keyboard } : {})
-        })
+      telegramChat: context.chat
     });
   });
 
   bot.command("track", async (context) => {
     const address = parseScanAddress(context.message?.text ?? "");
     if (!address) {
-      await context.reply("Send /track followed by a valid EVM contract address.");
+      await context.reply("⚠️ Send /track followed by a valid EVM contract address.");
       return;
     }
+    if (!context.chat) return;
 
-    const limit = options.scanLimiter?.check(
-      createTelegramRateLimitKey(context.chat?.id, context.from?.id)
+    const limit = checkTelegramRateLimit(
+      options.scanLimiter,
+      options.groupScanLimiter,
+      context.chat,
+      context.from?.id
     );
-    if (limit && !limit.allowed) {
+    if (!limit.allowed) {
       await context.reply(formatTelegramRateLimitReply(limit.retryAfterSeconds));
       return;
     }
 
     const tracking = await trackTelegramAddress(options.trackAddress, address, context.chat);
     if (!tracking) {
-      await context.reply("CA tracking is not configured for this bot yet.");
+      await context.reply("⚠️ CA tracking is not configured for this bot yet.");
       return;
     }
 
     await submitScanAndReply({
       address,
-      chatId: context.chat?.id,
+      chatId: context.chat.id,
       fromId: context.from?.id,
       telegramChat: context.chat,
-      tracking,
-      prefix: tracking.created
-        ? "Tracking enabled for this CA."
-        : "This CA is already being tracked.",
-      reply: (text, keyboard) =>
-        context.reply(text, {
-          parse_mode: "Markdown",
-          ...(keyboard ? { reply_markup: keyboard } : {})
-        })
+      tracking
     });
   });
 
   bot.command("untrack", async (context) => {
     const address = parseScanAddress(context.message?.text ?? "");
     if (!address) {
-      await context.reply("Send /untrack followed by a valid EVM contract address.");
+      await context.reply("⚠️ Send /untrack followed by a valid EVM contract address.");
       return;
     }
 
     const chat = createTelegramChatIdentity(context.chat);
     if (!chat || !options.untrackAddress) {
-      await context.reply("CA tracking is not configured for this bot yet.");
+      await context.reply("⚠️ CA tracking is not configured for this bot yet.");
       return;
     }
 
@@ -190,7 +242,7 @@ export function createTelegramBot(options: {
   bot.command("tracked", async (context) => {
     const chat = createTelegramChatIdentity(context.chat);
     if (!chat || !options.listTrackedAddresses) {
-      await context.reply("CA tracking is not configured for this bot yet.");
+      await context.reply("⚠️ CA tracking is not configured for this bot yet.");
       return;
     }
 
@@ -201,26 +253,26 @@ export function createTelegramBot(options: {
   bot.command("status", async (context) => {
     const scanId = parseCommandArgument(context.message?.text ?? "");
     if (!scanId) {
-      await context.reply("Send /status followed by a scan ID.");
+      await context.reply("⚠️ Send /status followed by a scan ID.");
       return;
     }
 
     const scan = await options.getScan(scanId);
     await context.reply(
-      scan ? formatTelegramProgressReply(scan) : "No scan was found for that ID."
+      scan ? formatTelegramProgressReply(scan) : "❓ No scan was found for that ID."
     );
   });
 
   bot.command("result", async (context) => {
     const scanId = parseCommandArgument(context.message?.text ?? "");
     if (!scanId) {
-      await context.reply("Send /result followed by a scan ID.");
+      await context.reply("⚠️ Send /result followed by a scan ID.");
       return;
     }
 
     const result = await options.getScanResult(scanId);
     if (!result) {
-      await context.reply("No scan result was found for that ID.");
+      await context.reply("❓ No scan result was found for that ID.");
       return;
     }
 
@@ -228,6 +280,7 @@ export function createTelegramBot(options: {
       parse_mode: "Markdown",
       reply_markup: createTelegramResultKeyboard(
         rememberTelegramCallbackScanId(callbackRegistry, result.scan.scanId),
+        resolveChartUrl(result),
         options.webAppUrl ? telegramFullReportUrl(options.webAppUrl, result) : undefined
       )
     });
@@ -250,10 +303,35 @@ export function createTelegramBot(options: {
       parse_mode: "Markdown",
       reply_markup: createTelegramResultKeyboard(
         rememberTelegramCallbackScanId(callbackRegistry, result.scan.scanId),
+        resolveChartUrl(result),
         options.webAppUrl ? telegramFullReportUrl(options.webAppUrl, result) : undefined
       )
     });
     await context.answerCallbackQuery({ text: "Result refreshed." });
+  });
+
+  bot.callbackQuery(/^back:(.+)$/u, async (context) => {
+    const scanId = resolveTelegramCallbackScanId(callbackRegistry, context.match[1]);
+    if (!scanId) {
+      await context.answerCallbackQuery({ text: "Missing scan ID." });
+      return;
+    }
+
+    const result = await options.getScanResult(scanId);
+    if (!result) {
+      await context.answerCallbackQuery({ text: "No scan result was found for that ID." });
+      return;
+    }
+
+    await context.editMessageText(formatTelegramResultReply(result), {
+      parse_mode: "Markdown",
+      reply_markup: createTelegramResultKeyboard(
+        rememberTelegramCallbackScanId(callbackRegistry, result.scan.scanId),
+        resolveChartUrl(result),
+        options.webAppUrl ? telegramFullReportUrl(options.webAppUrl, result) : undefined
+      )
+    });
+    await context.answerCallbackQuery();
   });
 
   bot.callbackQuery(/^status:(.+)$/u, async (context) => {
@@ -278,7 +356,7 @@ export function createTelegramBot(options: {
     await context.answerCallbackQuery();
   });
 
-  bot.callbackQuery(/^section:(holders|taxes|chart|cluster|controls):(.+)$/u, async (context) => {
+  bot.callbackQuery(/^section:(holders|cluster|controls):(.+)$/u, async (context) => {
     const section = context.match[1];
     const scanId = resolveTelegramCallbackScanId(callbackRegistry, context.match[2]);
     if (!isTelegramResultSection(section) || !scanId) {
@@ -292,20 +370,34 @@ export function createTelegramBot(options: {
       return;
     }
 
-    await context.reply(formatTelegramSectionReply(section, result), { parse_mode: "Markdown" });
+    // Edits the summary message in place rather than sending a new one — the whole point of
+    // Back is that a section view and the summary are the same message, just different content.
+    await context.editMessageText(formatTelegramSectionReply(section, result), {
+      parse_mode: "Markdown",
+      reply_markup: createTelegramSectionKeyboard(
+        rememberTelegramCallbackScanId(callbackRegistry, result.scan.scanId)
+      )
+    });
     await context.answerCallbackQuery();
   });
 
   bot.on("message:text", async (context) => {
+    // Never respond to another bot — a group with two token-scanner bots would otherwise loop
+    // each other's replies back and forth.
+    if (context.from?.is_bot) return;
+
     const address = parseScanAddress(context.message.text);
     if (!address) {
       return;
     }
 
-    const limit = options.scanLimiter?.check(
-      createTelegramRateLimitKey(context.chat.id, context.from?.id)
+    const limit = checkTelegramRateLimit(
+      options.scanLimiter,
+      options.groupScanLimiter,
+      context.chat,
+      context.from?.id
     );
-    if (limit && !limit.allowed) {
+    if (!limit.allowed) {
       await context.reply(formatTelegramRateLimitReply(limit.retryAfterSeconds));
       return;
     }
@@ -314,53 +406,102 @@ export function createTelegramBot(options: {
       address,
       chatId: context.chat.id,
       fromId: context.from?.id,
-      telegramChat: context.chat,
-      reply: (text, keyboard) =>
-        context.reply(text, {
-          parse_mode: "Markdown",
-          ...(keyboard ? { reply_markup: keyboard } : {})
-        })
+      telegramChat: context.chat
     });
   });
 
+  /**
+   * Submits a scan and replaces a single progress message in place as real backend stages
+   * advance (deleting the previous stage message before sending the next, not editing it — an
+   * animated "still working" feel rather than the earlier, now-removed static "Scan submitted"
+   * message this replaced). Once the scan reaches a terminal state, deletes the last stage
+   * message and sends the final result with its keyboard. Uses `bot.api` directly (not
+   * `context.reply`) because the animation needs to delete and send independently of any single
+   * incoming update's context.
+   */
   async function submitScanAndReply(input: {
     address: `0x${string}`;
-    chatId: number | bigint | undefined;
+    chatId: number | bigint;
     fromId: number | bigint | undefined;
     telegramChat: TelegramChatLike | undefined;
     tracking?: { item: TrackedTelegramAddress; created: boolean };
-    prefix?: string;
-    reply(text: string, keyboard?: InlineKeyboard): Promise<unknown>;
   }) {
+    // Telegram chat ids always fit within JS's safe integer range in practice; grammy's API
+    // client types chat_id as string | number, not bigint.
+    const chatId = Number(input.chatId);
     const tracking =
       input.tracking ??
       (await trackTelegramAddress(options.trackAddress, input.address, input.telegramChat));
     const scan = await options.submitScan(
       createTelegramScanInput(input.address, input.chatId, input.fromId)
     );
-    const result = await waitForTelegramResult(scan.scanId, options.getScanResult);
 
-    if (result) {
-      const prefix = input.prefix
-        ? `${input.prefix}\n\n`
-        : tracking
-          ? `${formatTelegramTrackingLine(tracking)}\n\n`
-          : "";
-      await input.reply(
-        `${prefix}${formatTelegramResultReply(result)}`,
-        createTelegramResultKeyboard(
-          rememberTelegramCallbackScanId(callbackRegistry, result.scan.scanId),
-          options.webAppUrl ? telegramFullReportUrl(options.webAppUrl, result) : undefined
-        )
-      );
+    const trackingLine = tracking ? formatTelegramTrackingLine(tracking) : null;
+    let stageMessageId: number | undefined;
+    let lastDisplayedState = scan.state;
+    try {
+      const sent = await bot.api.sendMessage(chatId, formatScanStageMessage(scan.state, trackingLine), {
+        parse_mode: "Markdown"
+      });
+      stageMessageId = sent.message_id;
+    } catch {
+      // If even the first stage message can't be sent (e.g. the bot was blocked, or this is a
+      // channel it can't post in), there is nothing further to animate or deliver.
       return;
     }
 
-    const prefix = input.prefix ? `${input.prefix}\n\n` : "";
-    await input.reply(
-      `${prefix}${formatTelegramScanReply(scan, tracking ? { tracking } : {})}`,
-      createTelegramScanKeyboard(rememberTelegramCallbackScanId(callbackRegistry, scan.scanId))
-    );
+    const maxAttempts = 45;
+    const pollDelayMs = 1_000;
+    let finalScan = scan;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const current = await options.getScan(scan.scanId);
+      if (!current) break;
+      finalScan = current;
+
+      if (current.state !== lastDisplayedState) {
+        lastDisplayedState = current.state;
+        if (stageMessageId !== undefined) {
+          await bot.api.deleteMessage(chatId, stageMessageId).catch(() => {});
+        }
+        if (!terminalScanStates.has(current.state)) {
+          const sent = await bot.api
+            .sendMessage(chatId, formatScanStageMessage(current.state, null), {
+              parse_mode: "Markdown"
+            })
+            .catch(() => undefined);
+          stageMessageId = sent?.message_id;
+        }
+      }
+
+      if (terminalScanStates.has(current.state)) break;
+      await sleep(pollDelayMs);
+    }
+
+    const result = await options.getScanResult(scan.scanId);
+    if (stageMessageId !== undefined) {
+      await bot.api.deleteMessage(chatId, stageMessageId).catch(() => {});
+    }
+
+    if (result) {
+      await bot.api.sendMessage(chatId, formatTelegramResultReply(result), {
+        parse_mode: "Markdown",
+        reply_markup: createTelegramResultKeyboard(
+          rememberTelegramCallbackScanId(callbackRegistry, result.scan.scanId),
+          resolveChartUrl(result),
+          options.webAppUrl ? telegramFullReportUrl(options.webAppUrl, result) : undefined
+        )
+      });
+      return;
+    }
+
+    // Still not terminal after generous polling (an unusually slow scan) — give the user a way
+    // to check back rather than a dead end with no further messages.
+    await bot.api.sendMessage(chatId, formatTelegramProgressReply(finalScan), {
+      parse_mode: "Markdown",
+      reply_markup: createTelegramScanKeyboard(
+        rememberTelegramCallbackScanId(callbackRegistry, scan.scanId)
+      )
+    });
   }
 
   return bot;
@@ -368,14 +509,8 @@ export function createTelegramBot(options: {
 
 function isTelegramResultSection(
   value: string | undefined
-): value is "holders" | "taxes" | "chart" | "cluster" | "controls" {
-  return (
-    value === "holders" ||
-    value === "taxes" ||
-    value === "chart" ||
-    value === "cluster" ||
-    value === "controls"
-  );
+): value is "holders" | "cluster" | "controls" {
+  return value === "holders" || value === "cluster" || value === "controls";
 }
 
 export function parseScanAddress(text: string): `0x${string}` | null {
@@ -431,31 +566,6 @@ export function createTelegramScanLimiter(options: TelegramScanLimitOptions): Te
   };
 }
 
-export function formatTelegramScanReply(
-  scan: ScanProgress,
-  options: { tracking?: { created: boolean } } = {}
-): string {
-  const block = scan.scanBlockNumber ? `\nBlock: ${scan.scanBlockNumber}` : "";
-  const tracked = options.tracking
-    ? `Tracking: ${formatTelegramTrackingLine(options.tracking)}`
-    : null;
-
-  const lines = [
-    `🛡️ *Scan submitted*`,
-    `🔎 State: ${escapeMarkdown(scan.state)}`,
-    `\`${scan.address}\``,
-    `⚙️ Scanner: ${escapeMarkdown(scan.scannerVersion)}${block}`,
-    "Use the buttons below for progress or report.",
-    "_Results are risk indicators, not guarantees._"
-  ];
-
-  if (tracked) {
-    lines.splice(4, 0, tracked);
-  }
-
-  return lines.join("\n");
-}
-
 export function formatTelegramRateLimitReply(retryAfterSeconds: number): string {
   return `⏳ Too many scan requests. Try again in about ${retryAfterSeconds} seconds.`;
 }
@@ -463,7 +573,7 @@ export function formatTelegramRateLimitReply(retryAfterSeconds: number): string 
 export function formatTelegramProgressReply(scan: ScanProgress): string {
   const fields = [
     `🔎 *Scan progress*`,
-    `State: ${escapeMarkdown(scan.state)}`,
+    `State: ${friendlyScanState(scan.state)}`,
     `\`${scan.scanId}\``,
     `Address: \`${scan.address}\``,
     `Message: ${escapeMarkdown(scan.message)}`
@@ -473,38 +583,27 @@ export function formatTelegramProgressReply(scan: ScanProgress): string {
     fields.push(`Block: ${scan.scanBlockNumber}`);
   }
 
-  if (scan.completedAt) {
-    fields.push(`Completed: ${scan.completedAt}`);
+  const completedAt = formatHumanDateTime(scan.completedAt);
+  if (completedAt) {
+    fields.push(`Completed: ${completedAt}`);
   }
 
   return fields.join("\n");
 }
 
-export function formatTelegramTrackReply(
-  tracking: { item: TrackedTelegramAddress; created: boolean },
-  scan: ScanProgress
-): string {
-  return [
-    tracking.created ? "Tracking enabled for this CA." : "This CA is already being tracked.",
-    `${tracking.item.chainId}:${tracking.item.address}`,
-    "",
-    formatTelegramScanReply(scan)
-  ].join("\n");
-}
-
 export function formatTelegramUntrackReply(address: `0x${string}`, removed: boolean): string {
   return removed
-    ? `Stopped tracking ${address}.`
-    : `That CA was not on this chat watchlist: ${address}`;
+    ? `🗑️ Stopped tracking ${address}.`
+    : `❓ That CA was not on this chat watchlist: ${address}`;
 }
 
 export function formatTelegramTrackedListReply(items: TrackedTelegramAddress[]): string {
   if (items.length === 0) {
-    return "No CAs are tracked in this chat yet. Use /track <contract address> or paste a CA.";
+    return "📌 No CAs are tracked in this chat yet. Use /track <contract address> or paste a CA.";
   }
 
   return [
-    `Tracked CAs (${items.length})`,
+    `📌 Tracked CAs (${items.length})`,
     ...items.map((item, index) => `${index + 1}. ${item.address} | chain ${item.chainId}`)
   ].join("\n");
 }
@@ -522,26 +621,26 @@ export function formatTelegramResultReply(result: ScanResultView): string {
 
   const topRisksBlock =
     topFindings.length > 0
-      ? ["*Top risks*", ...topFindings.map((f) => `${severityEmoji(f.severity)} ${escapeMarkdown(f.title)}`)].join("\n")
-      : "*Top risks:* none persisted";
+      ? ["🚩 *Top risks*", ...topFindings.map((f) => `${severityEmoji(f.severity)} ${escapeMarkdown(f.title)}`)].join("\n")
+      : "🚩 *Top risks:* none persisted ✅";
 
   const summary = buildTokenSecuritySummary(result);
 
   const lines = compact([
-    "*Genesis Sentinel*",
+    "🛡️ *Genesis Sentinel*",
     `${escapeMarkdown(formatTokenLabel(result))} ${riskEmoji(result)} *${formatRiskLine(result)}*`,
     `\`${result.scan.address}\``,
     "",
     // Leads the report: these mean the token can take your balance or your money regardless of
     // how the rest of the numbers look, so they belong above the usual metrics.
     criticalAlertBlock(result),
-    honeypot ? `Honeypot: ${honeypot}` : null,
+    honeypot ? `🍯 Honeypot: ${honeypot}` : null,
     capabilityLine(result),
     taxLine(tax),
     controlsSummaryLine(result),
     "",
-    ownership ? `Owner: ${ownership}${ownerAddress}` : null,
-    result.token.deployerAddress ? `Deployer: \`${shortenAddress(result.token.deployerAddress)}\`` : null,
+    ownership ? `👤 Owner: ${ownership}${ownerAddress}` : null,
+    result.token.deployerAddress ? `🏗️ Deployer: \`${shortenAddress(result.token.deployerAddress)}\`` : null,
     deployerBalanceLine(summary.deployerBalance, result),
     devClusterLine(summary.devCluster),
     sourceVerifiedLine(result),
@@ -557,7 +656,8 @@ export function formatTelegramResultReply(result: ScanResultView): string {
     topRisksBlock,
     "",
     result.risk.score === null ? null : "_Higher score means greater risk._",
-    `${escapeMarkdown(result.scan.state)} · v${escapeMarkdown(result.scan.scannerVersion)}`,
+    scannedAtLine(result),
+    `${friendlyScanState(result.scan.state)} · v${escapeMarkdown(result.scan.scannerVersion)}`,
     "_DYOR/NFA. Risk indicator, not a guarantee._"
   ]).filter((line, index, lines) => line !== "" || (lines[index - 1] !== "" && lines[index + 1] !== ""));
 
@@ -566,20 +666,33 @@ export function formatTelegramResultReply(result: ScanResultView): string {
 /** `fullReportUrl`, when provided, adds a button linking to the web app's much richer report
  * (wallet-cluster graph, every finding, evidence) — a compact Telegram message can't reproduce
  * that, so it needs an explicit way out rather than leaving Telegram users stuck with less
- * information than the web app has always shown for the same scan. */
+ * information than the web app has always shown for the same scan. `chartUrl` is omitted
+ * (never a dead link) when no liquidity pool has been discovered yet. Tax figures are already in
+ * the main summary line, so there is no separate Taxes button. */
 export function createTelegramResultKeyboard(
   callbackScanId: string,
+  chartUrl?: string,
   fullReportUrl?: string
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard()
-    .text("Holders", `section:holders:${callbackScanId}`)
-    .text("Controls", `section:controls:${callbackScanId}`)
-    .text("Dev cluster", `section:cluster:${callbackScanId}`)
-    .row()
-    .text("Taxes", `section:taxes:${callbackScanId}`)
-    .text("Chart", `section:chart:${callbackScanId}`)
-    .text("Refresh", `refresh:${callbackScanId}`);
-  return fullReportUrl ? keyboard.row().url("Full Report", fullReportUrl) : keyboard;
+    .text("📊 Controls", `section:controls:${callbackScanId}`)
+    .text("👥 Holders", `section:holders:${callbackScanId}`)
+    .text("🕸️ Dev Cluster", `section:cluster:${callbackScanId}`)
+    .row();
+  if (chartUrl) {
+    keyboard.url("📈 Chart", chartUrl);
+  }
+  keyboard.text("🔄 Refresh", `refresh:${callbackScanId}`);
+  return fullReportUrl ? keyboard.row().url("🔗 Full Report", fullReportUrl) : keyboard;
+}
+
+/** The keyboard shown while viewing a section (Controls/Holders/Dev Cluster) — Back returns to
+ * the main summary in place (an edit, not a new message), the same single level of navigation
+ * "back" ever needs since every section is reached directly from the summary. */
+export function createTelegramSectionKeyboard(callbackScanId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("◀️ Back", `back:${callbackScanId}`)
+    .text("🔄 Refresh", `refresh:${callbackScanId}`);
 }
 
 /** Robinhood Chain (4663) is the only chain the API implements end-to-end today, matching every
@@ -592,8 +705,8 @@ export function telegramFullReportUrl(webAppUrl: string, result: ScanResultView)
 
 export function createTelegramScanKeyboard(callbackScanId: string): InlineKeyboard {
   return new InlineKeyboard()
-    .text("Status", `status:${callbackScanId}`)
-    .text("Result", `refresh:${callbackScanId}`);
+    .text("🔎 Status", `status:${callbackScanId}`)
+    .text("📋 Result", `refresh:${callbackScanId}`);
 }
 
 export function createTelegramCallbackKey(scanId: string): string {
@@ -663,7 +776,7 @@ function formatSignalAnswer(answer: SecuritySignalAnswer): string {
 }
 
 export function formatTelegramSectionReply(
-  section: "holders" | "taxes" | "chart" | "cluster" | "controls",
+  section: "holders" | "cluster" | "controls",
   result: ScanResultView
 ): string {
   if (section === "controls") {
@@ -720,44 +833,28 @@ export function formatTelegramSectionReply(
     ]).join("\n");
   }
 
-  if (section === "holders") {
-    const concentration = readHolderConcentration(result);
-    return compact([
-      "*Holders*",
-      formatHolderCount(result) ? `Count: ${formatHolderCount(result)}` : null,
-      concentration.top1 || concentration.top5 || concentration.top10
-        ? `Top 1 / 5 / 10: ${concentration.top1 || "Not proven"} / ${concentration.top5 || "Not proven"} / ${concentration.top10 || "Not proven"}`
-        : null,
-      concentration.deployer || concentration.owner
-        ? `Deployer / Owner: ${concentration.deployer || "Not proven"} / ${concentration.owner || "Not proven"}`
-        : null,
-      concentration.liquidityPool || concentration.burned || concentration.excludedContracts
-        ? `LP / Burned / Excluded contracts: ${concentration.liquidityPool || "Not proven"} / ${concentration.burned || "Not proven"} / ${concentration.excludedContracts || "Not proven"}`
-        : null,
-      "",
-      `_${escapeMarkdown(result.holders.message)}_`
-    ]).join("\n");
-  }
-
-  if (section === "taxes") {
-    const tax = readTaxData(result);
-    const lines = compact([
-      "*Taxes*",
-      tax.buy ? `Buy: ${tax.buy}` : null,
-      tax.sell ? `Sell: ${tax.sell}` : null,
-      tax.transfer ? `Transfer: ${tax.transfer}` : null,
-    ]);
-    return lines.length > 1
-      ? lines.join("\n")
-      : "*Taxes*\nNo measured tax values were returned for this scan.";
-  }
-
-  return [
-    `📈 *Chart*`,
-    `\`${result.scan.address}\``,
+  // section === "holders" — bold labels with a hard line break between each stat and its group,
+  // rather than one dense "A / B / C" line, so it reads at a glance instead of requiring the
+  // reader to line up three numbers against three labels themselves.
+  const concentration = readHolderConcentration(result);
+  return compact([
+    "👥 *Holders*",
     "",
-    "_Chart links are not configured yet for Robinhood Chain markets._"
-  ].join("\n");
+    formatHolderCount(result) ? `*Total holders:* ${formatHolderCount(result)}` : null,
+    concentration.top10 ? `*Top 10 hold:* ${concentration.top10}` : null,
+    concentration.top1 || concentration.top5
+      ? `*Top 1 / 5:* ${concentration.top1 || "Not proven"} / ${concentration.top5 || "Not proven"}`
+      : null,
+    "",
+    concentration.deployer ? `*Deployer:* ${concentration.deployer}` : null,
+    concentration.owner ? `*Owner:* ${concentration.owner}` : null,
+    "",
+    concentration.liquidityPool || concentration.burned || concentration.excludedContracts
+      ? `*LP / Burned / Excluded:*\n${concentration.liquidityPool || "—"} / ${concentration.burned || "—"} / ${concentration.excludedContracts || "—"}`
+      : null,
+    "",
+    `_${escapeMarkdown(result.holders.message)}_`
+  ]).join("\n");
 }
 
 /**
@@ -813,7 +910,7 @@ function deployerBalanceLine(
 
   if (pct === null && amount === null) return null;
   const parts = compact([amount, pct === null ? null : `${pct.toFixed(2)}% of supply`]);
-  return `Deployer holds: ${parts.join(" · ")}`;
+  return `💰 Deployer holds: ${parts.join(" · ")}`;
 }
 
 function devClusterLine(devCluster: {
@@ -834,7 +931,7 @@ function devClusterLine(devCluster: {
     devCluster.unknownHoldingWalletCount > 0
       ? ` (+${devCluster.unknownHoldingWalletCount} not measured)`
       : "";
-  return `Dev cluster: ${wallets} · ${held}${gap}`;
+  return `🕸️ Dev cluster: ${wallets} · ${held}${gap}`;
 }
 
 /** Raw token units are unreadable in a chat message, so this abbreviates to K/M/B. */
@@ -920,12 +1017,12 @@ function formatTokenAge(createdAt: string | undefined): string | null {
 
 function sourceVerifiedLine(result: ScanResultView): string | null {
   if (result.token.sourceVerified === undefined) return null;
-  return `Verified: ${result.token.sourceVerified ? "Yes" : "No"}`;
+  return `📜 Verified: ${result.token.sourceVerified ? "Yes ✅" : "No ❌"}`;
 }
 
 function dexPaidLine(result: ScanResultView): string | null {
   if (result.token.dexPaid === undefined) return null;
-  return `Dex: ${result.token.dexPaid ? "Paid" : "Not paid"}`;
+  return `💳 Dex: ${result.token.dexPaid ? "Paid ✅" : "Not paid"}`;
 }
 
 function formatCapability(result: ScanResultView, kind: "BUY" | "SELL"): string | null {
@@ -1005,7 +1102,7 @@ function capabilityLine(result: ScanResultView): string | null {
   const buy = formatCapability(result, "BUY");
   const sell = formatCapability(result, "SELL");
   if (!buy && !sell) return null;
-  return `Buy / Sell: ${buy ?? "Not proven"} / ${sell ?? "Not proven"}`;
+  return `🔁 Buy / Sell: ${buy ?? "Not proven"} / ${sell ?? "Not proven"}`;
 }
 
 /** Above this, a tax stops being a fee and starts being most of your money. */
@@ -1027,7 +1124,7 @@ function taxLine(tax: { buy: string; sell: string; transfer: string }): string |
     tax.sell ? `S ${markPunitiveTax(tax.sell)}` : null,
     tax.transfer ? `T ${markPunitiveTax(tax.transfer)}` : null,
   ].filter((value): value is string => value !== null);
-  return values.length > 0 ? `Tax: ${values.join(" | ")}` : null;
+  return values.length > 0 ? `🧾 Tax: ${values.join(" | ")}` : null;
 }
 
 /** A one-line glance at the same control-surface signals the /Controls button breaks down in
@@ -1042,30 +1139,43 @@ function controlsSummaryLine(result: ScanResultView): string | null {
         signal.severity === "WARN" || signal.severity === "HIGH" || signal.severity === "CRITICAL"
     );
 
-  if (flagged.length === 0) return "Controls: no concerning flags";
-  return `Controls: ${flagged.length} flag${flagged.length === 1 ? "" : "s"} — ${flagged
+  if (flagged.length === 0) return "📊 Controls: no concerning flags ✅";
+  return `📊 Controls: ${flagged.length} flag${flagged.length === 1 ? "" : "s"} ⚠️ — ${flagged
     .map((signal) => escapeMarkdown(signal.label))
     .join(", ")}`;
 }
 
+function scannedAtLine(result: ScanResultView): string | null {
+  const lastScannedAt = formatHumanDateTime(result.scan.completedAt ?? result.scan.submittedAt);
+  if (!lastScannedAt) return null;
+
+  const firstScannedAt = formatHumanDateTime(result.scan.firstScannedAt);
+  // Only show a separate "first scanned" line when it's actually a different, earlier scan —
+  // for a token's very first scan the two would be identical, which would just be noise.
+  if (firstScannedAt && firstScannedAt !== lastScannedAt) {
+    return `🕒 First scanned: ${firstScannedAt}\n🕒 Last scanned: ${lastScannedAt}`;
+  }
+  return `🕒 Scanned: ${lastScannedAt}`;
+}
+
 function tokenAgeLine(result: ScanResultView): string | null {
   const age = formatTokenAge(result.token.contractCreatedAt);
-  return age ? `Chain: Robinhood | Age: ${age}` : "Chain: Robinhood";
+  return age ? `⛓️ Chain: Robinhood | Age: ${age}` : "⛓️ Chain: Robinhood";
 }
 
 function marketLine(result: ScanResultView): string | null {
-  const marketCap = formatTelegramUsd(result.token.marketCapUsd);
-  const volume = formatTelegramUsd(result.token.volume24hUsd);
+  const marketCap = formatCompactUsd(result.token.marketCapUsd);
+  const volume = formatCompactUsd(result.token.volume24hUsd);
   const values = [
     marketCap ? `MCap: ${marketCap}` : null,
     volume ? `Vol 24h: ${volume}` : null,
   ].filter((value): value is string => value !== null);
-  return values.length > 0 ? values.join(" | ") : null;
+  return values.length > 0 ? `📊 ${values.join(" | ")}` : null;
 }
 
 function priceLine(result: ScanResultView): string | null {
-  const price = formatTelegramUsd(result.token.priceUsd);
-  return price ? `Price: ${price}` : null;
+  const price = formatCompactUsd(result.token.priceUsd);
+  return price ? `💵 Price: ${price}` : null;
 }
 
 function liquidityLine(liquidity: ReturnType<typeof readLiquidityData>): string | null {
@@ -1074,7 +1184,7 @@ function liquidityLine(liquidity: ReturnType<typeof readLiquidityData>): string 
     liquidity.healthLabel ? `Health: ${liquidity.healthLabel}` : null,
     liquidity.burnedPct ? `Burn/Lock: ${liquidity.burnedPct}` : null,
   ].filter((value): value is string => value !== null);
-  return values.length > 0 ? values.join(" | ") : null;
+  return values.length > 0 ? `💧 ${values.join(" | ")}` : null;
 }
 
 function holdersLine(
@@ -1086,7 +1196,7 @@ function holdersLine(
     holderCount ? `Holders: ${holderCount}` : null,
     concentration.top10 ? `Top 10: ${concentration.top10}` : null,
   ].filter((value): value is string => value !== null);
-  return values.length > 0 ? values.join(" | ") : null;
+  return values.length > 0 ? `👥 ${values.join(" | ")}` : null;
 }
 
 const LIQUIDITY_HEALTH_LABEL: Record<LiquidityHealthTier, string> = {
@@ -1120,7 +1230,7 @@ function readLiquidityData(
   const healthTier = totalUsd != null ? liquidityHealthTier(totalUsd, quoteSidePctOfMarketCap, marketCapUsd) : null;
 
   return {
-    totalUsd: totalUsd != null ? (formatTelegramUsd(totalUsd.toString()) ?? "") : "",
+    totalUsd: totalUsd != null ? (formatCompactUsd(totalUsd) ?? "") : "",
     burnedPct: burnedPct != null ? `${burnedPct.toFixed(1)}%` : "",
     healthLabel: healthTier ? LIQUIDITY_HEALTH_LABEL[healthTier] : ""
   };
@@ -1193,23 +1303,6 @@ function shortenAddress(address: string): string {
   return address.length > 12 ? `${address.slice(0, 6)}...${address.slice(-4)}` : address;
 }
 
-function formatTelegramUsd(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    return null;
-  }
-
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: numeric < 1 ? 8 : 2
-  }).format(numeric);
-}
-
 function compact<T>(values: Array<T | null | undefined>): T[] {
   return values.filter((value): value is T => value !== null && value !== undefined);
 }
@@ -1226,6 +1319,30 @@ function createTelegramRateLimitKey(
   fromId: number | bigint | undefined
 ): string {
   return `chat:${chatId?.toString() ?? "unknown"}:user:${fromId?.toString() ?? "unknown"}`;
+}
+
+/**
+ * Checks the per chat+user limit first (bounds any single member's rate everywhere), then — only
+ * in group/supergroup chats — the aggregate per-chat limit too (bounds total volume a group can
+ * generate across all of its members combined). A private chat only ever has one "member" to
+ * begin with, so the group-wide check would be redundant there and is skipped.
+ */
+export function checkTelegramRateLimit(
+  scanLimiter: TelegramScanLimiter | undefined,
+  groupScanLimiter: TelegramScanLimiter | undefined,
+  chat: TelegramChatLike | undefined,
+  fromId: number | bigint | undefined
+): { allowed: true } | { allowed: false; retryAfterSeconds: number } {
+  const perUser = scanLimiter?.check(createTelegramRateLimitKey(chat?.id, fromId));
+  if (perUser && !perUser.allowed) return perUser;
+
+  const isGroupChat = chat?.type === "group" || chat?.type === "supergroup";
+  if (isGroupChat && groupScanLimiter) {
+    const groupWide = groupScanLimiter.check(`group:${chat?.id?.toString() ?? "unknown"}`);
+    if (!groupWide.allowed) return groupWide;
+  }
+
+  return { allowed: true };
 }
 
 function createTelegramScanInput(
@@ -1246,28 +1363,6 @@ function createTelegramScanInput(
   return input;
 }
 
-async function waitForTelegramResult(
-  scanId: string,
-  getScanResult: TelegramGetScanResult,
-  options: { attempts?: number; delayMs?: number } = {}
-): Promise<ScanResultView | null> {
-  const attempts = options.attempts ?? 8;
-  const delayMs = options.delayMs ?? 1_000;
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const result = await getScanResult(scanId);
-    if (result && terminalScanStates.has(result.scan.state)) {
-      return result;
-    }
-
-    if (attempt < attempts - 1) {
-      await sleep(delayMs);
-    }
-  }
-
-  return null;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -1276,8 +1371,8 @@ function sleep(ms: number): Promise<void> {
 
 function formatTelegramTrackingLine(tracking: { created: boolean }): string {
   return tracking.created
-    ? "added this CA to the chat watchlist."
-    : "this CA is already on the chat watchlist.";
+    ? "⭐ added this CA to the chat watchlist."
+    : "⭐ this CA is already on the chat watchlist.";
 }
 
 async function trackTelegramAddress(

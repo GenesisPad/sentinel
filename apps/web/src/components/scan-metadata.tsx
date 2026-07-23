@@ -3,9 +3,16 @@ import type { ScanReport } from "@/lib/types";
 import { formatNumber, timeAgo } from "@/lib/utils";
 
 export function ScanMetadata({ report, compact }: { report: ScanReport; compact?: boolean }) {
-  const scanned = timeAgo(report.cachedAt ?? report.scannedAt);
+  const scannedAt = report.cachedAt ?? report.scannedAt;
+  const scanned = timeAgo(scannedAt);
+  // Only shown when it's actually a different, earlier scan — for a token's very first scan
+  // this would equal "Scan time" and just be noise.
+  const showFirstScanned = report.firstScannedAt && report.firstScannedAt !== scannedAt;
   const items = [
     { label: "Scan time", value: report.cachedAt ? `Cached · ${scanned}` : scanned },
+    ...(showFirstScanned
+      ? [{ label: "First scanned", value: timeAgo(report.firstScannedAt as string) }]
+      : []),
     { label: "Block", value: formatNumber(report.block), mono: true },
     { label: "Scanner version", value: report.scannerVersion },
     { label: "Data source", value: report.dataSource },

@@ -17,7 +17,7 @@ import {
   YAxis
 } from "recharts";
 import { Activity, ArrowUpRight, CircleHelp, Radar, ShieldAlert, Users } from "lucide-react";
-import type { AnalyticsBreakdownItem, PublicAnalyticsView } from "@genesis-sentinel/shared";
+import { formatCompactUsd, type AnalyticsBreakdownItem, type PublicAnalyticsView } from "@genesis-sentinel/shared";
 import { getPublicAnalytics } from "@/lib/api";
 import { shortAddress } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -597,12 +597,7 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 }
 function formatUsd(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    notation: value >= 1_000_000 ? "compact" : "standard",
-    maximumFractionDigits: value >= 1_000_000 ? 1 : 0
-  }).format(value);
+  return formatCompactUsd(value) ?? "—";
 }
 function shortDate(value: string) {
   return new Date(`${value}T00:00:00`).toLocaleDateString(undefined, {
