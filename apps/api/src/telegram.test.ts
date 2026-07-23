@@ -9,6 +9,7 @@ import {
   formatScanStageMessage,
   formatTelegramProgressReply,
   formatTelegramRateLimitReply,
+  formatTelegramRegisteredUsers,
   formatTelegramResultReply,
   formatTelegramSectionReply,
   formatTelegramTrackedListReply,
@@ -37,13 +38,46 @@ describe("telegram scan helpers", () => {
       TELEGRAM_BOT_COMMANDS.length
     );
     expect(TELEGRAM_BOT_COMMANDS.map((item) => item.command)).toEqual(
-      expect.arrayContaining(["scan", "track", "stats", "charts", "activitychart", "scanschart"])
+      expect.arrayContaining([
+        "scan",
+        "track",
+        "stats",
+        "users",
+        "charts",
+        "activitychart",
+        "scanschart"
+      ])
     );
     expect(
       TELEGRAM_BOT_COMMANDS.every(
         (item) => /^[a-z0-9_]{1,32}$/u.test(item.command) && item.description.length <= 256
       )
     ).toBe(true);
+  });
+
+  it("renders a paginated registered-user directory without exposing raw IDs when usernames exist", () => {
+    const text = formatTelegramRegisteredUsers({
+      users: [
+        {
+          telegramUserId: "123",
+          username: "alice",
+          createdAt: new Date("2026-07-23T12:30:00Z")
+        },
+        {
+          telegramUserId: "456",
+          username: null,
+          createdAt: new Date("2026-07-23T13:00:00Z")
+        }
+      ],
+      page: 1,
+      total: 2,
+      totalPages: 1
+    });
+
+    expect(text).toContain("@alice");
+    expect(text).not.toContain("<code>123</code>");
+    expect(text).toContain("<code>456</code>");
+    expect(text).toContain("<b>2</b> total");
   });
 
   it("only recognizes explicitly configured Telegram administrators", () => {

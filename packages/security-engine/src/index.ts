@@ -2443,9 +2443,10 @@ const dexInteractionSelectors = {
  * selector-surface detectors, this describes what the contract is wired to do and does not
  * claim exploitability.
  *
- * Swap selectors alone are common in tax tokens that auto-swap fees, so they are reported at
- * MEDIUM. Pool-control selectors (createPair / addLiquidity / removeLiquidity) are a much
- * stronger signal: a token that can create or modify its own pool can also desync or drain it.
+ * Swap selectors alone are common implementation machinery in tax tokens that auto-swap fees.
+ * Their presence remains check evidence but is not a scored finding; measured tax and fee-control
+ * detectors decide whether the behavior is actually risky. Pool-control selectors (createPair /
+ * addLiquidity / removeLiquidity) remain a much stronger, scored signal.
  */
 export const dexInteractionSurfaceDetector: SecurityDetector<BytecodeDetectorInput> = {
   metadata: {
@@ -2493,31 +2494,13 @@ export const dexInteractionSurfaceDetector: SecurityDetector<BytecodeDetectorInp
         })
       );
     }
-    if (swap.length > 0) {
-      findings.push(
-        createFinding({
-          code: "TOKEN_ROUTER_SWAP_SURFACE",
-          detector: this.metadata,
-          title: "Token bytecode calls a DEX router to swap",
-          severity: "MEDIUM",
-          category: "CONTRACT_CONTROL",
-          confidence: "MEDIUM",
-          description:
-            "The token embeds router swap selectors, typically used to auto-swap collected fees. This is common in fee-taking tokens but means the contract trades on its own behalf.",
-          technicalExplanation: `Router swap selectors found in bytecode: ${swap.join(", ")}.`,
-          evidence: [evidence],
-          recommendation:
-            "Check the fee rate and where swapped proceeds are sent; this path routes value out of the contract during ordinary transfers."
-        })
-      );
-    }
-
+    const interactionPresent = poolControl.length > 0 || swap.length > 0;
     return {
       detector: this.metadata,
       checks: [
         {
-          code: findings.length > 0 ? "DEX_INTERACTION_SURFACE_PRESENT" : "DEX_INTERACTION_SURFACE_ABSENT",
-          outcome: findings.length > 0 ? "DETECTED" : "PASSED",
+          code: interactionPresent ? "DEX_INTERACTION_SURFACE_PRESENT" : "DEX_INTERACTION_SURFACE_ABSENT",
+          outcome: interactionPresent ? "DETECTED" : "PASSED",
           confidence: "MEDIUM",
           evidence: [evidence]
         }

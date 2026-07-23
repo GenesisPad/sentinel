@@ -50,6 +50,16 @@ export type TelegramRecordActivity = (input: {
   action: string;
 }) => Promise<void>;
 export type TelegramGetAdminAnalytics = () => Promise<TelegramAnalytics>;
+export interface TelegramRegisteredUsersPage {
+  users: Array<{ telegramUserId: string; username: string | null; createdAt: Date }>;
+  page: number;
+  total: number;
+  totalPages: number;
+}
+export type TelegramGetRegisteredUsers = (
+  page: number,
+  pageSize: number
+) => Promise<TelegramRegisteredUsersPage>;
 export type TelegramTokenContractStatus =
   | { kind: "SUPPORTED" }
   | { kind: "UNSUPPORTED_CHAIN"; chainName: string }
@@ -68,6 +78,7 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: "status", description: "Check scan progress: /status <scan id>" },
   { command: "result", description: "Open a saved scan result: /result <scan id>" },
   { command: "stats", description: "Admin: web and Telegram traffic statistics" },
+  { command: "users", description: "Admin: browse registered Telegram users" },
   { command: "charts", description: "Admin: open analytics charts" },
   { command: "activitychart", description: "Admin: web and bot activity chart" },
   { command: "scanschart", description: "Admin: scan traffic by source" },
@@ -182,6 +193,7 @@ export function createTelegramBot(options: {
   adminIds?: string[];
   recordActivity?: TelegramRecordActivity;
   getAdminAnalytics?: TelegramGetAdminAnalytics;
+  getRegisteredUsers?: TelegramGetRegisteredUsers;
   isTokenContract?: TelegramIsTokenContract;
 }) {
   const bot = new Bot(options.token);
@@ -361,6 +373,26 @@ export function createTelegramBot(options: {
   bot.command("activitychart", (context) => showAdminChart(context, "activity", "7d", false));
   bot.command("scanschart", (context) => showAdminChart(context, "scans", "7d", false));
   bot.command("userbasechart", (context) => showAdminChart(context, "users", "30d", false));
+  const showRegisteredUsers = async (context: Context, requestedPage: number) => {
+    if (!(await requireAdmin(context))) return;
+    if (!options.getRegisteredUsers) {
+      await context.reply("⚠️ Registered-user reporting is not configured.");
+      return;
+    }
+    const result = await options.getRegisteredUsers(requestedPage, 10);
+    const text = formatTelegramRegisteredUsers(result);
+    const replyMarkup = registeredUsersKeyboard(result.page, result.totalPages);
+    if (context.callbackQuery) {
+      await context.editMessageText(text, { parse_mode: "HTML", reply_markup: replyMarkup });
+      await context.answerCallbackQuery({ text: `Page ${result.page} of ${result.totalPages}` });
+    } else {
+      await context.reply(text, { parse_mode: "HTML", reply_markup: replyMarkup });
+    }
+  };
+  bot.command("users", (context) => showRegisteredUsers(context, 1));
+  bot.callbackQuery(/^adminusers:(\d+)$/u, (context) =>
+    showRegisteredUsers(context, Number(context.match[1]))
+  );
   bot.callbackQuery(/^adminchart:(activity|scans|users):(24h|7d|30d|all)$/u, (context) =>
     showAdminChart(
       context,
@@ -1030,10 +1062,49 @@ export function telegramFullReportUrl(webAppUrl: string, result: ScanResultView)
 
 function adminChartsMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
+    .text("👤 Registered users", "adminusers:1")
+    .row()
     .text("⚡ Activity", "admincharts:activity")
     .text("🔎 Scans", "admincharts:scans")
     .row()
     .text("👤 User growth", "admincharts:users");
+}
+
+export function formatTelegramRegisteredUsers(result: TelegramRegisteredUsersPage): string {
+  const offset = (result.page - 1) * 10;
+  const rows = result.users.map((user, index) => {
+    const identity = user.username
+      ? `@${escapeTelegramHtml(user.username.replace(/^@/u, ""))}`
+      : `No username · <code>${escapeTelegramHtml(user.telegramUserId)}</code>`;
+    const registered = user.createdAt.toLocaleString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "UTC"
+    });
+    return `<b>${offset + index + 1}. ${identity}</b>\n📅 ${registered} UTC`;
+  });
+  return [
+    "👤 <b>Registered Users</b>",
+    `Page <b>${result.page}</b> of <b>${result.totalPages}</b> · <b>${result.total}</b> total`,
+    "",
+    rows.join("\n\n") || "No registered Telegram users yet."
+  ].join("\n");
+}
+
+function registeredUsersKeyboard(page: number, totalPages: number): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  if (page > 1) keyboard.text("⬅️ Previous", `adminusers:${page - 1}`);
+  keyboard.text(`${page}/${totalPages}`, `adminusers:${page}`);
+  if (page < totalPages) keyboard.text("Next ➡️", `adminusers:${page + 1}`);
+  return keyboard.row().text("🔄 Refresh", `adminusers:${page}`);
+}
+
+function escapeTelegramHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function adminChartKeyboard(kind: TelegramChartKind, selected: TelegramChartRange): InlineKeyboard {

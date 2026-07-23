@@ -1987,7 +1987,18 @@ describe("dex interaction surface detector", () => {
 
     const codes = result.findings.map((finding) => finding.code);
     expect(codes).toContain("TOKEN_POOL_CONTROL_SURFACE");
-    expect(codes).toContain("TOKEN_ROUTER_SWAP_SURFACE");
+    expect(codes).not.toContain("TOKEN_ROUTER_SWAP_SURFACE");
+    expect(result.checks[0]?.outcome).toBe("DETECTED");
+  });
+
+  it("records a tax-token router swap surface as evidence without scoring it", async () => {
+    const result = await dexInteractionSurfaceDetector.run(
+      { bytecode: "0x60806040791ac947" },
+      context
+    );
+
+    expect(result.findings).toHaveLength(0);
+    expect(result.checks[0]?.outcome).toBe("DETECTED");
   });
 
   it("does not flag a plain ERC-20 bytecode", async () => {

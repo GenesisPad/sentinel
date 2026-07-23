@@ -44,6 +44,7 @@ import {
   createTelegramScanLimiter,
   TELEGRAM_BOT_COMMANDS,
   type TelegramGetAdminAnalytics,
+  type TelegramGetRegisteredUsers,
   type TelegramListTrackedAddresses,
   type TelegramRecordActivity,
   type TelegramTrackAddress,
@@ -236,6 +237,29 @@ export async function buildApp({
         };
       }
     : undefined;
+  const getTelegramRegisteredUsers: TelegramGetRegisteredUsers | undefined = prisma
+    ? async (requestedPage, pageSize) => {
+        const total = await prisma.telegramUser.count();
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const page = Math.min(Math.max(1, requestedPage), totalPages);
+        const users = await prisma.telegramUser.findMany({
+          select: { telegramUserId: true, username: true, createdAt: true },
+          orderBy: { createdAt: "asc" },
+          skip: (page - 1) * pageSize,
+          take: pageSize
+        });
+        return {
+          users: users.map((user) => ({
+            telegramUserId: user.telegramUserId.toString(),
+            username: user.username,
+            createdAt: user.createdAt
+          })),
+          page,
+          total,
+          totalPages
+        };
+      }
+    : undefined;
   const apiKeys = apiKeyRepository ?? (prisma ? createApiKeyRepository(prisma) : null);
   const queue = scanQueue ?? createScanQueue(env.REDIS_URL);
   const scanRateLimiter = createRateLimiter(RATE_LIMIT_WINDOW_MS);
@@ -392,6 +416,7 @@ export async function buildApp({
         },
         ...(recordTelegramActivity ? { recordActivity: recordTelegramActivity } : {}),
         ...(getTelegramAdminAnalytics ? { getAdminAnalytics: getTelegramAdminAnalytics } : {}),
+        ...(getTelegramRegisteredUsers ? { getRegisteredUsers: getTelegramRegisteredUsers } : {}),
         ...(telegramTracking
           ? {
               trackAddress: ((input) =>
