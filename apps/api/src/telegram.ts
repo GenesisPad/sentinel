@@ -1,5 +1,6 @@
 ﻿import { createHash } from "node:crypto";
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
+import { robinhoodChainBlockscoutUrl } from "@genesis-sentinel/chain-adapters";
 import type {
   TelegramChatIdentity,
   TrackedTelegramAddress,
@@ -237,7 +238,8 @@ export function createTelegramBot(options: {
           ? [
               ...analytics.webScanEvents,
               ...analytics.telegramScanEvents,
-              ...analytics.apiScanEvents
+              ...analytics.apiScanEvents,
+              ...analytics.unknownScanEvents
             ]
           : analytics.registrations;
     const series = buildTelegramSeries(events, range, analytics.generatedAt, kind === "users");
@@ -273,6 +275,14 @@ export function createTelegramBot(options: {
                 label: "API",
                 values: buildTelegramSeries(analytics.apiScanEvents, range, analytics.generatedAt)
                   .values
+              },
+              {
+                label: "Legacy",
+                values: buildTelegramSeries(
+                  analytics.unknownScanEvents,
+                  range,
+                  analytics.generatedAt
+                ).values
               }
             ]
           : undefined;
@@ -330,6 +340,7 @@ export function createTelegramBot(options: {
         `🌐 Web: <b>${stats.webScans.toLocaleString("en-US")}</b>`,
         `🤖 Telegram: <b>${stats.telegramScans.toLocaleString("en-US")}</b>`,
         `🔌 API: <b>${stats.apiScans.toLocaleString("en-US")}</b>`,
+        `❔ Unknown / legacy: <b>${stats.unknownScans.toLocaleString("en-US")}</b>`,
         "",
         "<b>Activity by source</b>",
         `🌐 Web page views: <b>${stats.webActivities.toLocaleString("en-US")}</b>`,
@@ -403,6 +414,15 @@ export function createTelegramBot(options: {
       return;
     }
     if (!context.chat) return;
+    if (
+      options.isTokenContract &&
+      !(await options.isTokenContract(address).catch(() => false))
+    ) {
+      await context.reply(
+        "ℹ️ That address is a wallet or does not expose the ERC-20 token interface, so Sentinel did not scan it."
+      );
+      return;
+    }
 
     const limit = checkTelegramRateLimit(
       options.scanLimiter,
@@ -430,6 +450,15 @@ export function createTelegramBot(options: {
       return;
     }
     if (!context.chat) return;
+    if (
+      options.isTokenContract &&
+      !(await options.isTokenContract(address).catch(() => false))
+    ) {
+      await context.reply(
+        "ℹ️ That address is a wallet or does not expose the ERC-20 token interface, so Sentinel did not track or scan it."
+      );
+      return;
+    }
 
     const limit = checkTelegramRateLimit(
       options.scanLimiter,
@@ -627,7 +656,7 @@ export function createTelegramBot(options: {
     }
 
     const isGroup = context.chat.type === "group" || context.chat.type === "supergroup";
-    if (isGroup && options.isTokenContract) {
+    if (options.isTokenContract) {
       const isToken = await shouldAutoScanTelegramAddress(
         context.chat.type,
         address,
@@ -635,7 +664,14 @@ export function createTelegramBot(options: {
       );
       // EOAs/wallets and contracts that do not expose ERC-20 metadata are deliberately ignored
       // in groups so normal address sharing does not trigger noisy false-positive scans.
-      if (!isToken) return;
+      if (!isToken) {
+        if (!isGroup) {
+          await context.reply(
+            "ℹ️ That address is a wallet or does not expose the ERC-20 token interface, so Sentinel did not scan it."
+          );
+        }
+        return;
+      }
     }
 
     const limit = checkTelegramRateLimit(
@@ -778,11 +814,10 @@ export function parseCommandArgument(text: string): string | null {
 }
 
 export async function shouldAutoScanTelegramAddress(
-  chatType: string,
+  _chatType: string,
   address: `0x${string}`,
   isTokenContract?: TelegramIsTokenContract
 ): Promise<boolean> {
-  if (chatType !== "group" && chatType !== "supergroup") return true;
   if (!isTokenContract) return true;
   return isTokenContract(address).catch(() => false);
 }
@@ -878,7 +913,7 @@ export function formatTelegramResultReply(result: ScanResultView): string {
   const liquidity = readLiquidityData(result);
   const concentration = readHolderConcentration(result);
   const ownerAddress = result.token.ownerAddress
-    ? ` (` + "`" + `${shortenAddress(result.token.ownerAddress)}` + "`" + `)`
+    ? ` (${explorerAddressLink(result.token.ownerAddress)})`
     : "";
   const ownership = formatOwnershipStatus(result);
 
@@ -907,7 +942,7 @@ export function formatTelegramResultReply(result: ScanResultView): string {
     "",
     ownership ? `👤 Owner: ${ownership}${ownerAddress}` : null,
     result.token.deployerAddress
-      ? `🏗️ Deployer: \`${shortenAddress(result.token.deployerAddress)}\``
+      ? `🏗️ Deployer: ${explorerAddressLink(result.token.deployerAddress)}`
       : null,
     deployerBalanceLine(summary.deployerBalance, result),
     devClusterLine(summary.devCluster),
@@ -1112,7 +1147,7 @@ export function formatTelegramSectionReply(
         .slice(0, 10)
         .map(
           (wallet) =>
-            `\`${shortenAddress(wallet.address)}\` — ${escapeMarkdown(roleLabels[wallet.role] ?? wallet.role)}: ${
+            `${explorerAddressLink(wallet.address)} — ${escapeMarkdown(roleLabels[wallet.role] ?? wallet.role)}: ${
               wallet.holdingPct === null
                 ? "not measured"
                 : formatSupplyPercentage(wallet.holdingPct)
@@ -1432,7 +1467,13 @@ function controlsSummaryLine(result: ScanResultView): string | null {
 
   if (flagged.length === 0) return "📊 Controls: no concerning flags ✅";
   return `📊 Controls: ${flagged.length} flag${flagged.length === 1 ? "" : "s"} ⚠️ — ${flagged
-    .map((signal) => escapeMarkdown(signal.label))
+    .map((signal) =>
+      escapeMarkdown(
+        signal.id === "ownership_renounced" && signal.answer === "NO"
+          ? "Ownership not renounced"
+          : signal.label
+      )
+    )
     .join(", ")}`;
 }
 
@@ -1595,6 +1636,10 @@ function shortenAddress(address: string): string {
   // reply — /scan, pasted addresses, /result, refresh — to fail with a 500 and the bot going
   // completely silent. Verified live against production logs.
   return address.length > 12 ? `${address.slice(0, 6)}...${address.slice(-4)}` : address;
+}
+
+function explorerAddressLink(address: string): string {
+  return `[${shortenAddress(address)}](${robinhoodChainBlockscoutUrl}/address/${address})`;
 }
 
 function compact<T>(values: Array<T | null | undefined>): T[] {

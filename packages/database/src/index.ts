@@ -73,7 +73,7 @@ export interface CreateScanInput {
   requestedBy?: string;
 }
 
-export type ScanRequestSource = "WEB" | "TELEGRAM" | "API";
+export type ScanRequestSource = "WEB" | "TELEGRAM" | "API" | "UNKNOWN";
 
 export interface ScanRepository {
   createOrGetQueuedScan(input: CreateScanInput): Promise<{ scan: ScanProgress; created: boolean }>;

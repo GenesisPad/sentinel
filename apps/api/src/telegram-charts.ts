@@ -18,6 +18,7 @@ export interface TelegramAnalytics {
   webScans: number;
   telegramScans: number;
   apiScans: number;
+  unknownScans: number;
   webActivities: number;
   telegramActivities: number;
   activities: TelegramAnalyticsEvent[];
@@ -26,6 +27,7 @@ export interface TelegramAnalytics {
   webScanEvents: TelegramAnalyticsEvent[];
   telegramScanEvents: TelegramAnalyticsEvent[];
   apiScanEvents: TelegramAnalyticsEvent[];
+  unknownScanEvents: TelegramAnalyticsEvent[];
   registrations: TelegramAnalyticsEvent[];
 }
 
@@ -131,7 +133,7 @@ export async function renderTelegramChart(input: {
         `<text x="${point.x}" y="${height - 55}" text-anchor="middle" class="axis">${xml(point.label)}</text>`
     )
     .join("");
-  const palette = ["#7fa4ff", "#55d6be", "#f2b84b"];
+  const palette = ["#7fa4ff", "#55d6be", "#f2b84b", "#9aa6b8"];
   const marks = input.datasets
     ? input.datasets
         .flatMap((dataset, datasetIndex) =>

@@ -191,6 +191,7 @@ enum ScanRequestSource {
   WEB
   TELEGRAM
   API
+  UNKNOWN
 }
 
 /// One row per scan request, including cache hits, so channel attribution measures demand

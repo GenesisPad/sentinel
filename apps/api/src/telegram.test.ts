@@ -62,7 +62,7 @@ describe("telegram scan helpers", () => {
     ).resolves.toBe(false);
     await expect(
       shouldAutoScanTelegramAddress("private", token, () => Promise.resolve(false))
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
   });
 
   it("extracts command arguments with optional bot mentions", () => {
@@ -352,11 +352,11 @@ describe("telegram scan helpers", () => {
 
     const reply = formatTelegramResultReply(result);
 
-    expect(reply).toContain("Deployer: `0x8cfa...b561`");
+    expect(reply).toContain(
+      "Deployer: [0x8cfa...b561](https://robinhoodchain.blockscout.com/address/0x8cfa84924011b19765136baea669ac81fe8bb561)"
+    );
     const deployerLine = reply.split("\n").find((line) => line.includes("Deployer:"));
-    const codeSpan = deployerLine?.match(/`([^`]*)`/u)?.[1];
-    expect(codeSpan).toBe("0x8cfa...b561");
-    expect(codeSpan && /^[\x00-\x7F]*$/.test(codeSpan)).toBe(true);
+    expect(deployerLine).toContain("0x8cfa...b561");
   });
 
   it("escapes underscores in risk-level enum values, never breaking Telegram's Markdown parser", () => {
@@ -977,6 +977,21 @@ describe("telegram report informativeness", () => {
 
     expect(reply).toContain("Controls: 1 flag");
     expect(reply).toContain("Can create more tokens");
+  });
+
+  it("labels active ownership as not renounced in the controls warning", () => {
+    const result = baseResult();
+    result.token.ownershipStatus = "ACTIVE";
+    result.token.ownerAddress = "0x00000000000000000000000000000000000000d1";
+
+    const reply = formatTelegramResultReply(result);
+
+    expect(reply).toContain("Controls: 1 flag");
+    expect(reply).toContain("Ownership not renounced");
+    expect(reply).not.toContain("— Ownership renounced");
+    expect(reply).toContain(
+      "Owner: Active ([0x0000...00d1](https://robinhoodchain.blockscout.com/address/0x00000000000000000000000000000000000000d1))"
+    );
   });
 
   it("reports no concerning control flags when nothing was detected", () => {

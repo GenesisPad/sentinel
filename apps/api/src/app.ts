@@ -198,7 +198,7 @@ export async function buildApp({
             take: 100_000
           })
         ]);
-        const sourceCount = (source: "WEB" | "TELEGRAM" | "API") =>
+        const sourceCount = (source: "WEB" | "TELEGRAM" | "API" | "UNKNOWN") =>
           scanRequests.find((item) => item.source === source)?._count._all ?? 0;
         const scanEventsBySource = await prisma.scanRequest.findMany({
           select: { source: true, createdAt: true },
@@ -216,6 +216,7 @@ export async function buildApp({
           webScans: sourceCount("WEB"),
           telegramScans: sourceCount("TELEGRAM"),
           apiScans: sourceCount("API"),
+          unknownScans: sourceCount("UNKNOWN"),
           webActivities: webActivityCount,
           telegramActivities: telegramActivityCount,
           activities: activities.map((event) => ({ at: event.createdAt })),
@@ -229,6 +230,9 @@ export async function buildApp({
             .map((event) => ({ at: event.createdAt })),
           apiScanEvents: scanEventsBySource
             .filter((event) => event.source === "API")
+            .map((event) => ({ at: event.createdAt })),
+          unknownScanEvents: scanEventsBySource
+            .filter((event) => event.source === "UNKNOWN")
             .map((event) => ({ at: event.createdAt })),
           registrations: registrations.map((event) => ({ at: event.createdAt }))
         };
