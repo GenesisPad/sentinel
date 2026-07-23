@@ -470,3 +470,16 @@ model TelegramChat {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
+
+/// Durable interaction log for admin-only Telegram usage analytics.
+model TelegramActivity {
+  id             String   @id @default(cuid())
+  telegramUserId BigInt?
+  telegramChatId BigInt
+  action         String
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([telegramUserId, createdAt])
+  @@index([telegramChatId, createdAt])
+}

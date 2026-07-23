@@ -26,6 +26,7 @@ jobs:
           CONTABO_USER: ${{ secrets.CONTABO_USER }}
           CONTABO_SSH_KEY: ${{ secrets.CONTABO_SSH_KEY }}
           API_ADMIN_SECRET: ${{ secrets.API_ADMIN_SECRET }}
+          TELEGRAM_ADMIN_IDS: ${{ secrets.TELEGRAM_ADMIN_IDS }}
         run: |
           set -e
           missing=0
@@ -44,6 +45,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           API_ADMIN_SECRET: ${{ secrets.API_ADMIN_SECRET }}
+          TELEGRAM_ADMIN_IDS: ${{ secrets.TELEGRAM_ADMIN_IDS }}
         with:
           host: ${{ secrets.CONTABO_HOST }}
           username: ${{ secrets.CONTABO_USER }}
@@ -51,7 +53,7 @@ jobs:
           port: ${{ secrets.CONTABO_PORT || '22' }}
           timeout: 30s
           command_timeout: 30m
-          envs: API_ADMIN_SECRET
+          envs: API_ADMIN_SECRET,TELEGRAM_ADMIN_IDS
           script: |
             set -e
 
@@ -93,6 +95,7 @@ jobs:
             ROBINHOOD_FALLBACK_RPC_URLS=
             TELEGRAM_BOT_TOKEN=
             TELEGRAM_WEBHOOK_SECRET=
+            TELEGRAM_ADMIN_IDS=
             TELEGRAM_SCAN_COOLDOWN_SECONDS=15
             TELEGRAM_SCAN_BURST_LIMIT=5
             TELEGRAM_SCAN_BURST_WINDOW_SECONDS=300
@@ -112,6 +115,14 @@ jobs:
                 sed -i "s|^API_ADMIN_SECRET=.*|API_ADMIN_SECRET=${API_ADMIN_SECRET}|" "$ENV_FILE"
               else
                 printf '\nAPI_ADMIN_SECRET=%s\n' "$API_ADMIN_SECRET" >> "$ENV_FILE"
+              fi
+            fi
+
+            if [ -n "${TELEGRAM_ADMIN_IDS:-}" ]; then
+              if grep -q "^TELEGRAM_ADMIN_IDS=" "$ENV_FILE"; then
+                sed -i "s|^TELEGRAM_ADMIN_IDS=.*|TELEGRAM_ADMIN_IDS=${TELEGRAM_ADMIN_IDS}|" "$ENV_FILE"
+              else
+                printf '\nTELEGRAM_ADMIN_IDS=%s\n' "$TELEGRAM_ADMIN_IDS" >> "$ENV_FILE"
               fi
             fi
 

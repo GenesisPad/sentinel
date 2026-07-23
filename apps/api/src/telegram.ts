@@ -1,5 +1,5 @@
 ﻿import { createHash } from "node:crypto";
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 import type {
   TelegramChatIdentity,
   TrackedTelegramAddress,
@@ -20,6 +20,13 @@ import {
   type SecuritySignalSeverity
 } from "@genesis-sentinel/shared";
 import type { SubmitScanInput } from "./scan-service.js";
+import {
+  buildTelegramSeries,
+  renderTelegramChart,
+  type TelegramAnalytics,
+  type TelegramChartKind,
+  type TelegramChartRange
+} from "./telegram-charts.js";
 
 export type TelegramSubmitScan = (input: SubmitScanInput) => Promise<ScanProgress>;
 export type TelegramGetScan = (scanId: string) => Promise<ScanProgress | null>;
@@ -33,6 +40,14 @@ export type TelegramUntrackAddress = (
 export type TelegramListTrackedAddresses = (
   chat: TelegramChatIdentity
 ) => Promise<TrackedTelegramAddress[]>;
+export type TelegramRecordActivity = (input: {
+  userId?: bigint;
+  username?: string;
+  chatId: bigint;
+  chatType: string;
+  action: string;
+}) => Promise<void>;
+export type TelegramGetAdminAnalytics = () => Promise<TelegramAnalytics>;
 
 const addressPattern = /0x[a-fA-F0-9]{40}/;
 const terminalScanStates = new Set(["COMPLETED", "PARTIALLY_COMPLETED", "FAILED"]);
@@ -102,6 +117,13 @@ export interface TelegramScanLimiter {
   check(key: string): { allowed: true } | { allowed: false; retryAfterSeconds: number };
 }
 
+export function isTelegramAdmin(
+  userId: number | bigint | undefined,
+  adminIds: ReadonlySet<string>
+): boolean {
+  return userId !== undefined && adminIds.has(userId.toString());
+}
+
 interface TelegramCallbackRegistry {
   scanIdsByKey: Map<string, string>;
   keysByScanId: Map<string, string>;
@@ -132,6 +154,9 @@ export function createTelegramBot(options: {
    * deployment that hasn't wired live market refresh yet).
    */
   refreshScanResult?: TelegramGetScanResult;
+  adminIds?: string[];
+  recordActivity?: TelegramRecordActivity;
+  getAdminAnalytics?: TelegramGetAdminAnalytics;
 }) {
   const bot = new Bot(options.token);
   const getSummaryScanResult = options.refreshScanResult ?? options.getScanResult;
@@ -139,6 +164,132 @@ export function createTelegramBot(options: {
     scanIdsByKey: new Map(),
     keysByScanId: new Map()
   };
+  const adminIds = new Set(options.adminIds ?? []);
+
+  bot.use(async (context, next) => {
+    if (context.chat && options.recordActivity) {
+      const action = context.callbackQuery
+        ? `button:${context.callbackQuery.data}`
+        : context.message?.text?.startsWith("/")
+          ? `command:${context.message.text.split(/\s+/u)[0]?.slice(1).toLowerCase()}`
+          : "message:text";
+      await options
+        .recordActivity({
+          ...(context.from ? { userId: BigInt(context.from.id) } : {}),
+          ...(context.from?.username ? { username: context.from.username } : {}),
+          chatId: BigInt(context.chat.id),
+          chatType: context.chat.type,
+          action
+        })
+        .catch(() => undefined);
+    }
+    await next();
+  });
+
+  const requireAdmin = async (context: Context): Promise<boolean> => {
+    if (isTelegramAdmin(context.from?.id, adminIds)) return true;
+    const message = "🔒 Admin access required. Sentinel statistics and operational charts are restricted to bot administrators.";
+    if (context.callbackQuery) {
+      await context.answerCallbackQuery({ text: message, show_alert: true });
+    } else {
+      await context.reply(message);
+    }
+    return false;
+  };
+
+  const showAdminChart = async (
+    context: Context,
+    kind: TelegramChartKind,
+    range: TelegramChartRange,
+    replace: boolean
+  ) => {
+    if (!(await requireAdmin(context))) return;
+    if (!options.getAdminAnalytics) {
+      await context.reply("⚠️ Admin analytics are not configured.");
+      return;
+    }
+    if (!replace) await context.replyWithChatAction("upload_photo");
+    const analytics = await options.getAdminAnalytics();
+    const events =
+      kind === "activity"
+        ? analytics.activities
+        : kind === "scans"
+          ? analytics.scans
+          : analytics.registrations;
+    const series = buildTelegramSeries(events, range, analytics.generatedAt, kind === "users");
+    const title =
+      kind === "activity"
+        ? "Telegram activity"
+        : kind === "scans"
+          ? "Sentinel scans"
+          : "Registered Telegram users";
+    const image = await renderTelegramChart({
+      title,
+      subtitle: `${range === "all" ? "All time" : `Last ${range}`} · UTC`,
+      labels: series.labels,
+      values: series.values,
+      line: kind === "users"
+    });
+    const keyboard = adminChartKeyboard(kind, range);
+    if (replace) {
+      await context.editMessageMedia(
+        { type: "photo", media: new InputFile(image, `${kind}-${range}.png`), caption: `${title} · ${range === "all" ? "all time" : range}` },
+        { reply_markup: keyboard }
+      );
+      await context.answerCallbackQuery({ text: "Chart refreshed." });
+      return;
+    }
+    await context.replyWithPhoto(new InputFile(image, `${kind}-${range}.png`), {
+      caption: `${title} · ${range === "all" ? "all time" : range}`,
+      reply_markup: keyboard
+    });
+    if (context.callbackQuery) await context.answerCallbackQuery();
+  };
+
+  bot.command("stats", async (context) => {
+    if (!(await requireAdmin(context))) return;
+    if (!options.getAdminAnalytics) return void (await context.reply("⚠️ Admin analytics are not configured."));
+    const stats = await options.getAdminAnalytics();
+    await context.reply(
+      [
+        "📊 <b>Genesis Sentinel Stats</b>",
+        "",
+        `👤 Telegram users: <b>${stats.users.toLocaleString("en-US")}</b>`,
+        `💬 Telegram chats: <b>${stats.chats.toLocaleString("en-US")}</b>`,
+        `👁 Tracked contracts: <b>${stats.trackedContracts.toLocaleString("en-US")}</b>`,
+        `🔎 Total scans: <b>${stats.totalScans.toLocaleString("en-US")}</b>`,
+        `✅ Completed: <b>${stats.completedScans.toLocaleString("en-US")}</b>`,
+        `⚠️ Failed: <b>${stats.failedScans.toLocaleString("en-US")}</b>`
+      ].join("\n"),
+      { parse_mode: "HTML", reply_markup: adminChartsMenuKeyboard() }
+    );
+  });
+  bot.command("charts", async (context) => {
+    if (!(await requireAdmin(context))) return;
+    await context.reply("📈 <b>Admin Charts</b>\n\nChoose an operational view.", {
+      parse_mode: "HTML",
+      reply_markup: adminChartsMenuKeyboard()
+    });
+  });
+  bot.command("activitychart", (context) => showAdminChart(context, "activity", "7d", false));
+  bot.command("scanschart", (context) => showAdminChart(context, "scans", "7d", false));
+  bot.command("userbasechart", (context) => showAdminChart(context, "users", "30d", false));
+  bot.callbackQuery(/^adminchart:(activity|scans|users):(24h|7d|30d|all)$/u, (context) =>
+    showAdminChart(
+      context,
+      context.match[1] as TelegramChartKind,
+      context.match[2] as TelegramChartRange,
+      true
+    )
+  );
+  bot.callbackQuery(/^admincharts:(activity|scans|users)$/u, (context) =>
+    showAdminChart(
+      context,
+      context.match[1] as TelegramChartKind,
+      context.match[1] === "users" ? "30d" : "7d",
+      false
+    )
+  );
 
   bot.command("start", async (context) => {
     await context.reply(
@@ -711,6 +862,28 @@ export function createTelegramSectionKeyboard(callbackScanId: string): InlineKey
  * chain registry just for this one link. */
 export function telegramFullReportUrl(webAppUrl: string, result: ScanResultView): string {
   return `${webAppUrl.replace(/\/+$/u, "")}/token/robinhood/${result.scan.address}`;
+}
+
+function adminChartsMenuKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("⚡ Activity", "admincharts:activity")
+    .text("🔎 Scans", "admincharts:scans")
+    .row()
+    .text("👤 User growth", "admincharts:users");
+}
+
+function adminChartKeyboard(
+  kind: TelegramChartKind,
+  selected: TelegramChartRange
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const range of ["24h", "7d", "30d", "all"] as const) {
+    keyboard.text(
+      `${selected === range ? "✓ " : ""}${range === "all" ? "All" : range}`,
+      `adminchart:${kind}:${range}`
+    );
+  }
+  return keyboard;
 }
 
 export function createTelegramScanKeyboard(callbackScanId: string): InlineKeyboard {

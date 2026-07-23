@@ -41,7 +41,9 @@ import { submitScanRequest } from "./scan-service.js";
 import {
   createTelegramBot,
   createTelegramScanLimiter,
+  type TelegramGetAdminAnalytics,
   type TelegramListTrackedAddresses,
+  type TelegramRecordActivity,
   type TelegramTrackAddress,
   type TelegramUntrackAddress
 } from "./telegram.js";
@@ -113,6 +115,83 @@ export async function buildApp({
   const prisma = scanRepository ? undefined : createPrismaClient(env.DATABASE_URL);
   const scans = scanRepository ?? createScanRepository(prisma!);
   const telegramTracking = prisma ? createTelegramTrackingRepository(prisma) : null;
+  const recordTelegramActivity: TelegramRecordActivity | undefined = prisma
+    ? async (input) => {
+        await prisma.$transaction(async (transaction) => {
+          if (input.userId) {
+            await transaction.telegramUser.upsert({
+              where: { telegramUserId: input.userId },
+              create: {
+                telegramUserId: input.userId,
+                ...(input.username ? { username: input.username } : {})
+              },
+              update: input.username ? { username: input.username } : {}
+            });
+          }
+          await transaction.telegramChat.upsert({
+            where: { telegramChatId: input.chatId },
+            create: { telegramChatId: input.chatId, type: input.chatType },
+            update: { type: input.chatType }
+          });
+          await transaction.telegramActivity.create({
+            data: {
+              ...(input.userId ? { telegramUserId: input.userId } : {}),
+              telegramChatId: input.chatId,
+              action: input.action
+            }
+          });
+        });
+      }
+    : undefined;
+  const getTelegramAdminAnalytics: TelegramGetAdminAnalytics | undefined = prisma
+    ? async () => {
+        const [
+          users,
+          chats,
+          trackedContracts,
+          totalScans,
+          completedScans,
+          failedScans,
+          activities,
+          scansForChart,
+          registrations
+        ] = await Promise.all([
+          prisma.telegramUser.count(),
+          prisma.telegramChat.count(),
+          prisma.watchlistItem.count(),
+          prisma.scan.count(),
+          prisma.scan.count({ where: { state: { in: ["COMPLETED", "PARTIALLY_COMPLETED"] } } }),
+          prisma.scan.count({ where: { state: "FAILED" } }),
+          prisma.telegramActivity.findMany({
+            select: { createdAt: true },
+            orderBy: { createdAt: "asc" },
+            take: 100_000
+          }),
+          prisma.scan.findMany({
+            select: { queuedAt: true },
+            orderBy: { queuedAt: "asc" },
+            take: 100_000
+          }),
+          prisma.telegramUser.findMany({
+            select: { createdAt: true },
+            orderBy: { createdAt: "asc" },
+            take: 100_000
+          })
+        ]);
+        return {
+          generatedAt: new Date(),
+          users,
+          chats,
+          trackedContracts,
+          totalScans,
+          completedScans,
+          failedScans,
+          activities: activities.map((event) => ({ at: event.createdAt })),
+          scans: scansForChart.map((event) => ({ at: event.queuedAt })),
+          registrations: registrations.map((event) => ({ at: event.createdAt }))
+        };
+      }
+    : undefined;
   const apiKeys = apiKeyRepository ?? (prisma ? createApiKeyRepository(prisma) : null);
   const queue = scanQueue ?? createScanQueue(env.REDIS_URL);
   const scanRateLimiter = createRateLimiter(RATE_LIMIT_WINDOW_MS);
@@ -242,6 +321,9 @@ export async function buildApp({
           const result = await scans.getScanResult(scanId);
           return result ? refreshVolatileFields(result) : null;
         },
+        adminIds: env.TELEGRAM_ADMIN_IDS,
+        ...(recordTelegramActivity ? { recordActivity: recordTelegramActivity } : {}),
+        ...(getTelegramAdminAnalytics ? { getAdminAnalytics: getTelegramAdminAnalytics } : {}),
         ...(telegramTracking
           ? {
               trackAddress: ((input) => telegramTracking.trackAddress(input)) satisfies TelegramTrackAddress,

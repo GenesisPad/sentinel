@@ -14,6 +14,19 @@ Stage 12 turns the Telegram boundary into a usable command workflow while keepin
 - `/untrack <contract address>`: removes a CA from the current Telegram chat watchlist.
 - Pasted EVM contract addresses are treated like `/scan`.
 
+Admin-only operational commands:
+
+- `/stats`: current Telegram, tracking, and scan totals.
+- `/charts`: chart menu.
+- `/activitychart`: Telegram interactions over time.
+- `/scanschart`: Sentinel scans over time.
+- `/userbasechart`: cumulative registered Telegram users over time.
+
+Every command and chart-filter callback checks `TELEGRAM_ADMIN_IDS`. Regular
+users receive an explicit access-denied explanation. Chart range buttons
+(`24h`, `7d`, `30d`, and `All`) replace the existing chart image rather than
+sending a new message.
+
 `/scan` and pasted CAs also auto-add the address to the current chat watchlist when Telegram tracking storage is configured. Tracking is per chat, so private chats and group chats do not share CA lists.
 
 Result messages use a dense bot-report layout: contract address, risk line, honeypot status, buy/sell capability, tax, owner/deployer, source-verified and Dex-paid status, token age, market cap/volume/price, liquidity (with the same market-cap-aware health tier and negligible-liquidity floor as the web app — see below), holder concentration, top findings, and inline buttons for `Chart`, `Holders`, `Taxes`, `Refresh`, and (when `WEB_PUBLIC_APP_URL` is configured) `Full Report`, linking to the richer web report — wallet-cluster graph, every finding, full evidence — a compact Telegram message can't reproduce.

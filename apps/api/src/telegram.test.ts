@@ -14,6 +14,7 @@ import {
   formatTelegramTrackedListReply,
   formatTelegramUntrackReply,
   friendlyScanState,
+  isTelegramAdmin,
   parseCommandArgument,
   parseScanAddress,
   resolveChartUrl,
@@ -22,6 +23,13 @@ import {
 } from "./telegram.js";
 
 describe("telegram scan helpers", () => {
+  it("only recognizes explicitly configured Telegram administrators", () => {
+    const admins = new Set(["542602805"]);
+    expect(isTelegramAdmin(542602805, admins)).toBe(true);
+    expect(isTelegramAdmin(8747821953, admins)).toBe(false);
+    expect(isTelegramAdmin(undefined, admins)).toBe(false);
+  });
+
   it("extracts a valid contract address from scan commands", () => {
     expect(parseScanAddress("/scan 0x0000000000000000000000000000000000000001")).toBe(
       "0x0000000000000000000000000000000000000001"

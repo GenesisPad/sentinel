@@ -34,6 +34,15 @@ export const envSchema = z.object({
   ROBINHOOD_FALLBACK_RPC_URLS: z.string().default(""),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
+  TELEGRAM_ADMIN_IDS: z
+    .string()
+    .default("")
+    .transform((value) =>
+      value
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => /^\d+$/u.test(id))
+    ),
   API_ADMIN_SECRET: z.string().min(16).optional(),
   TELEGRAM_SCAN_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(86_400).default(0),
   TELEGRAM_SCAN_BURST_LIMIT: z.coerce.number().int().min(1).max(1_000).default(30),
