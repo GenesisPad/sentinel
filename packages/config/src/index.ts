@@ -34,6 +34,7 @@ export const envSchema = z.object({
   ROBINHOOD_FALLBACK_RPC_URLS: z.string().default(""),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
+  GENESISPAD_MAIN_GROUP_CHAT_ID: z.coerce.number().int().optional(),
   TELEGRAM_ADMIN_IDS: z
     .string()
     .default("")

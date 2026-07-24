@@ -505,6 +505,12 @@ model TelegramChat {
   updatedAt      DateTime @updatedAt
 }
 
+model BotSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
 /// Durable interaction log for admin-only Telegram usage analytics.
 model TelegramActivity {
   id             String   @id @default(cuid())

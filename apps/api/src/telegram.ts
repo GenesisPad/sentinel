@@ -3,6 +3,7 @@ import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 import { robinhoodChainBlockscoutUrl } from "@genesis-sentinel/chain-adapters";
 import type {
   TelegramChatIdentity,
+  TelegramGroupAlertMedia,
   TrackedTelegramAddress,
   TrackTelegramAddressInput
 } from "@genesis-sentinel/database";
@@ -75,8 +76,7 @@ export const TELEGRAM_BOT_COMMANDS = [
   { command: "track", description: "Scan and track a token contract in this chat" },
   { command: "untrack", description: "Stop tracking a token contract in this chat" },
   { command: "tracked", description: "List token contracts tracked in this chat" },
-  { command: "status", description: "Check scan progress: /status <scan id>" },
-  { command: "result", description: "Open a saved scan result: /result <scan id>" },
+  { command: "setgroupalertmedia", description: "Admin: set global new-group alert media" },
   { command: "stats", description: "Admin: web and Telegram traffic statistics" },
   { command: "users", description: "Admin: browse registered Telegram users" },
   { command: "charts", description: "Admin: open analytics charts" },
@@ -167,6 +167,9 @@ interface TelegramCallbackRegistry {
 
 export function createTelegramBot(options: {
   token: string;
+  newGroupAlertChatId?: number;
+  getGroupAlertMedia?: () => Promise<TelegramGroupAlertMedia | null>;
+  setGroupAlertMedia?: (media: TelegramGroupAlertMedia) => Promise<void>;
   /** Base URL of the web app, used to build "Full Report" links. Omit to hide that button. */
   webAppUrl?: string;
   submitScan: TelegramSubmitScan;
@@ -209,6 +212,7 @@ export function createTelegramBot(options: {
     keysByScanId: new Map()
   };
   const adminIds = new Set(options.adminIds ?? []);
+  const pendingGroupAlertMediaAdmins = new Set<number>();
 
   bot.use(async (context, next) => {
     if (context.chat && options.recordActivity) {
@@ -241,6 +245,77 @@ export function createTelegramBot(options: {
     }
     return false;
   };
+
+  bot.command("setgroupalertmedia", async (context) => {
+    if (!(await requireAdmin(context))) return;
+    if (context.chat.type !== "private") {
+      await context.reply("Use this command in a private chat with Sentinel.");
+      return;
+    }
+    if (!options.setGroupAlertMedia) {
+      await context.reply("New-group alert media storage is not configured.");
+      return;
+    }
+    pendingGroupAlertMediaAdmins.add(context.from!.id);
+    await context.reply("Send the photo or GIF to attach to the new group alert.");
+  });
+
+  bot.on(["message:photo", "message:animation"], async (context, next) => {
+    if (
+      context.chat.type !== "private" ||
+      !context.from ||
+      !pendingGroupAlertMediaAdmins.has(context.from.id) ||
+      !isTelegramAdmin(context.from.id, adminIds) ||
+      !options.setGroupAlertMedia
+    ) {
+      await next();
+      return;
+    }
+    const media = extractGroupAlertMedia(context.message);
+    if (!media) {
+      await context.reply("Send a photo or GIF to use as the alert media.");
+      return;
+    }
+    await options.setGroupAlertMedia(media);
+    pendingGroupAlertMediaAdmins.delete(context.from.id);
+    await context.reply("New group alert media saved.");
+  });
+
+  bot.on("my_chat_member", async (context) => {
+    const update = context.myChatMember;
+    if (
+      !options.newGroupAlertChatId ||
+      !shouldSendNewGroupAlert({
+        chatType: update.chat.type,
+        oldStatus: update.old_chat_member.status,
+        newStatus: update.new_chat_member.status
+      })
+    ) {
+      return;
+    }
+    const memberCount = await context.api.getChatMemberCount(update.chat.id).catch(() => null);
+    const alert = buildSentinelNewGroupAlert({
+      groupName: update.chat.title ?? "New group",
+      memberCount,
+      botUsername: context.me.username
+    });
+    const media = await options.getGroupAlertMedia?.().catch(() => null);
+    const mediaOptions = {
+      caption: alert.text,
+      parse_mode: "HTML" as const,
+      reply_markup: alert.replyMarkup
+    };
+    if (media?.type === "photo") {
+      await context.api.sendPhoto(options.newGroupAlertChatId, media.fileId, mediaOptions);
+    } else if (media?.type === "animation") {
+      await context.api.sendAnimation(options.newGroupAlertChatId, media.fileId, mediaOptions);
+    } else {
+      await context.api.sendMessage(options.newGroupAlertChatId, alert.text, {
+        parse_mode: "HTML",
+        reply_markup: alert.replyMarkup
+      });
+    }
+  });
 
   const showAdminChart = async (
     context: Context,
@@ -417,8 +492,6 @@ export function createTelegramBot(options: {
         "",
         "*Commands:*",
         "🔍 /scan <contract address>",
-        "🔎 /status <scan id>",
-        "📋 /result <scan id>",
         "⭐ /track <contract address>",
         "📌 /tracked",
         "🗑️ /untrack <contract address>"
@@ -431,8 +504,6 @@ export function createTelegramBot(options: {
     await context.reply(
       [
         "🔍 Send /scan <contract address> or paste a contract address.",
-        "🔎 Use /status <scan id> to check progress.",
-        "📋 Use /result <scan id> to summarize persisted findings.",
         "⭐ Use /track <contract address> to save a CA for this chat.",
         "📌 Use /tracked to list saved CAs.",
         "🗑️ Use /untrack <contract address> to remove one.",
@@ -538,42 +609,6 @@ export function createTelegramBot(options: {
 
     const tracked = await options.listTrackedAddresses(chat);
     await context.reply(formatTelegramTrackedListReply(tracked));
-  });
-
-  bot.command("status", async (context) => {
-    const scanId = parseCommandArgument(context.message?.text ?? "");
-    if (!scanId) {
-      await context.reply("⚠️ Send /status followed by a scan ID.");
-      return;
-    }
-
-    const scan = await options.getScan(scanId);
-    await context.reply(
-      scan ? formatTelegramProgressReply(scan) : "❓ No scan was found for that ID."
-    );
-  });
-
-  bot.command("result", async (context) => {
-    const scanId = parseCommandArgument(context.message?.text ?? "");
-    if (!scanId) {
-      await context.reply("⚠️ Send /result followed by a scan ID.");
-      return;
-    }
-
-    const result = await getSummaryScanResult(scanId);
-    if (!result) {
-      await context.reply("❓ No scan result was found for that ID.");
-      return;
-    }
-
-    await context.reply(formatTelegramResultReply(result), {
-      parse_mode: "Markdown",
-      reply_markup: createTelegramResultKeyboard(
-        rememberTelegramCallbackScanId(callbackRegistry, result.scan.scanId),
-        resolveChartUrl(result),
-        options.webAppUrl ? telegramFullReportUrl(options.webAppUrl, result) : undefined
-      )
-    });
   });
 
   bot.callbackQuery(/^refresh:(.+)$/u, async (context) => {
@@ -840,6 +875,54 @@ export function parseCommandArgument(text: string): string | null {
     .replace(/^\/[a-zA-Z_]+(?:@[a-zA-Z0-9_]+)?\s*/, "")
     .trim();
   return argument.length > 0 ? argument : null;
+}
+
+export function shouldSendNewGroupAlert(input: {
+  chatType: string;
+  oldStatus: string;
+  newStatus: string;
+}): boolean {
+  return (
+    (input.chatType === "group" || input.chatType === "supergroup") &&
+    (input.oldStatus === "left" || input.oldStatus === "kicked") &&
+    (input.newStatus === "member" || input.newStatus === "administrator")
+  );
+}
+
+export function buildSentinelNewGroupAlert(input: {
+  groupName: string;
+  memberCount: number | null;
+  botUsername: string;
+}): { text: string; replyMarkup: InlineKeyboard } {
+  const lines = [
+    "🛡️ <b>SENTINEL JOINED A NEW GROUP</b>",
+    "",
+    `🏷️ Community: ${escapeTelegramHtml(input.groupName)}`
+  ];
+  if (input.memberCount !== null) {
+    lines.push(`👥 Members: ${input.memberCount.toLocaleString("en-US")}`);
+  }
+  lines.push("", "Another community now has Genesis Sentinel watching for token risk.");
+  return {
+    text: lines.join("\n"),
+    replyMarkup: new InlineKeyboard().url(
+      "Add Sentinel to Your Group",
+      `https://t.me/${encodeURIComponent(input.botUsername)}?startgroup=true`
+    )
+  };
+}
+
+function extractGroupAlertMedia(message: unknown): TelegramGroupAlertMedia | null {
+  if (!message || typeof message !== "object") return null;
+  const input = message as {
+    photo?: Array<{ file_id?: string }>;
+    animation?: { file_id?: string };
+  };
+  if (input.animation?.file_id) {
+    return { fileId: input.animation.file_id, type: "animation" };
+  }
+  const photoFileId = input.photo?.at(-1)?.file_id;
+  return photoFileId ? { fileId: photoFileId, type: "photo" } : null;
 }
 
 export async function shouldAutoScanTelegramAddress(

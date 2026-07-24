@@ -140,6 +140,16 @@ export interface TelegramTrackingRepository {
   listTrackedAddresses(chat: TelegramChatIdentity): Promise<TrackedTelegramAddress[]>;
 }
 
+export type TelegramGroupAlertMedia = {
+  fileId: string;
+  type: "photo" | "animation";
+};
+
+export interface TelegramGroupAlertMediaRepository {
+  getMedia(): Promise<TelegramGroupAlertMedia | null>;
+  setMedia(media: TelegramGroupAlertMedia): Promise<void>;
+}
+
 export interface ScanTarget {
   scanId: string;
   chainId: number;
@@ -1316,6 +1326,40 @@ export function createTelegramTrackingRepository(db: PrismaDatabase): TelegramTr
       });
 
       return items.map(toTrackedTelegramAddress);
+    }
+  };
+}
+
+export function createTelegramGroupAlertMediaRepository(
+  db: PrismaDatabase
+): TelegramGroupAlertMediaRepository {
+  const settingKey = "sentinel_new_group_alert_media";
+  return {
+    async getMedia() {
+      const setting = await db.botSetting.findUnique({ where: { key: settingKey } });
+      if (
+        !setting ||
+        typeof setting.value !== "object" ||
+        setting.value === null ||
+        Array.isArray(setting.value)
+      ) {
+        return null;
+      }
+      const value = setting.value as Record<string, unknown>;
+      if (
+        typeof value.fileId !== "string" ||
+        (value.type !== "photo" && value.type !== "animation")
+      ) {
+        return null;
+      }
+      return { fileId: value.fileId, type: value.type };
+    },
+    async setMedia(media) {
+      await db.botSetting.upsert({
+        where: { key: settingKey },
+        create: { key: settingKey, value: media },
+        update: { value: media }
+      });
     }
   };
 }

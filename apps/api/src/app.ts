@@ -12,6 +12,7 @@ import {
   createApiKeyRepository,
   createPrismaClient,
   createScanRepository,
+  createTelegramGroupAlertMediaRepository,
   createTelegramTrackingRepository,
   type ApiKeyRepository,
   type ScanRepository
@@ -121,6 +122,9 @@ export async function buildApp({
   const prisma = scanRepository ? undefined : createPrismaClient(env.DATABASE_URL);
   const scans = scanRepository ?? createScanRepository(prisma!);
   const telegramTracking = prisma ? createTelegramTrackingRepository(prisma) : null;
+  const telegramGroupAlertMedia = prisma
+    ? createTelegramGroupAlertMediaRepository(prisma)
+    : null;
   const recordTelegramActivity: TelegramRecordActivity | undefined = prisma
     ? async (input) => {
         await prisma.$transaction(async (transaction) => {
@@ -400,6 +404,15 @@ export async function buildApp({
           return result ? refreshVolatileFields(result) : null;
         },
         adminIds: env.TELEGRAM_ADMIN_IDS,
+        ...(env.GENESISPAD_MAIN_GROUP_CHAT_ID
+          ? { newGroupAlertChatId: env.GENESISPAD_MAIN_GROUP_CHAT_ID }
+          : {}),
+        ...(telegramGroupAlertMedia
+          ? {
+              getGroupAlertMedia: () => telegramGroupAlertMedia.getMedia(),
+              setGroupAlertMedia: (media) => telegramGroupAlertMedia.setMedia(media)
+            }
+          : {}),
         isTokenContract: async (address) => {
           if (!telegramChainAdapter) return false;
           const bytecode = await telegramChainAdapter.getBytecode({ address });
