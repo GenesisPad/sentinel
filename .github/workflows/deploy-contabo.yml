@@ -93,10 +93,10 @@ jobs:
             REDIS_URL=
             ROBINHOOD_RPC_URL=
             ROBINHOOD_FALLBACK_RPC_URLS=
-            ARC_RPC_URL=
+            ARC_RPC_URL=https://rpc.blockdaemon.mainnet.arc.io
             ARC_FALLBACK_RPC_URLS=
-            STABLE_RPC_URL=
-            STABLE_FALLBACK_RPC_URLS=
+            STABLE_RPC_URL=https://stable.drpc.org
+            STABLE_FALLBACK_RPC_URLS=https://stable-mainnet.rpc.sentio.xyz
             TELEGRAM_BOT_TOKEN=
             TELEGRAM_WEBHOOK_SECRET=
             TELEGRAM_ADMIN_IDS=
@@ -149,11 +149,17 @@ jobs:
               echo "SIMULATION_FORK_ENABLED=true" >> "$ENV_FILE"
             fi
 
-            for var in ARC_RPC_URL ARC_FALLBACK_RPC_URLS STABLE_RPC_URL STABLE_FALLBACK_RPC_URLS; do
+            for var in ARC_FALLBACK_RPC_URLS STABLE_FALLBACK_RPC_URLS; do
               if ! grep -q "^${var}=" "$ENV_FILE"; then
                 echo "${var}=" >> "$ENV_FILE"
               fi
             done
+            if ! grep -q "^ARC_RPC_URL=" "$ENV_FILE"; then
+              echo "ARC_RPC_URL=https://rpc.blockdaemon.mainnet.arc.io" >> "$ENV_FILE"
+            fi
+            if ! grep -q "^STABLE_RPC_URL=" "$ENV_FILE"; then
+              echo "STABLE_RPC_URL=https://stable.drpc.org" >> "$ENV_FILE"
+            fi
 
             rm -rf "$RELEASE_DIR"
             git clone --depth 1 --branch main "$REPO_URL" "$RELEASE_DIR"

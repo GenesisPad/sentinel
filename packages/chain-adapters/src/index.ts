@@ -122,7 +122,7 @@ export const robinhoodChainPublicRpcUrl = "https://rpc.mainnet.chain.robinhood.c
 export const robinhoodChainBlockscoutUrl = "https://robinhoodchain.blockscout.com";
 
 export const arcChainId = 5042;
-export const arcChainPublicRpcUrl = "https://rpc-mainnet.arc.io";
+export const arcChainPublicRpcUrl = "https://rpc.blockdaemon.mainnet.arc.io";
 export const arcChainBlockscoutUrl = "https://arcscan.cc";
 
 export const arcChainConfig: ChainConfig = {
@@ -150,7 +150,7 @@ export const arcChainConfig: ChainConfig = {
 };
 
 export const stableChainId = 988;
-export const stableChainPublicRpcUrl = "https://rpc.stable.xyz";
+export const stableChainPublicRpcUrl = "https://stable.drpc.org";
 export const stableChainBlockscoutUrl = "https://stablescan.xyz";
 
 export const stableChainConfig: ChainConfig = {
