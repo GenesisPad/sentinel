@@ -117,7 +117,7 @@ export function createUnsupportedLiquidityProvider(chainId: number): LiquidityPr
         checkedQuoteSymbols: []
       };
     },
-    async discoverPools() {
+    discoverPools() {
       return [];
     }
   };
