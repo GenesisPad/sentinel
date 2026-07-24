@@ -250,6 +250,28 @@ describe("dangerous opcode detector", () => {
     });
   });
 
+  it("recognizes canonical EIP-1167 delegatecall as expected clone behavior", async () => {
+    const result = await dangerousOpcodeDetector.run(
+      {
+        bytecode:
+          "0x363d3d373d3d3d363d737777c8743c88b3aff3cf262135bef2c8b2e833335af43d82803e903d91602b57fd5bf3"
+      },
+      context
+    );
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        code: "EIP1167_MINIMAL_PROXY_DETECTED",
+        severity: "INFO",
+        confidence: "HIGH"
+      })
+    ]);
+    expect(result.checks[0]).toMatchObject({
+      code: "EIP1167_MINIMAL_PROXY_DETECTED",
+      outcome: "PASSED"
+    });
+  });
+
   it("detects a real SELFDESTRUCT instruction", async () => {
     const result = await dangerousOpcodeDetector.run({ bytecode: "0x6000ff" }, context);
 
@@ -1456,9 +1478,9 @@ describe("deployer history detector", () => {
       context
     );
 
-    expect(result.findings.some((finding) => finding.code === "BYTECODE_REUSED_ACROSS_SCANS")).toBe(
-      true
-    );
+    expect(
+      result.findings.find((finding) => finding.code === "BYTECODE_REUSED_ACROSS_SCANS")
+    ).toMatchObject({ severity: "INFO" });
   });
 
   it("passes with no finding when no related-wallet edges were found", async () => {
@@ -1532,6 +1554,29 @@ describe("deployer history detector", () => {
     expect((supplyFindings[0]?.evidence[0]?.data as { edges: unknown[] }).edges).toHaveLength(6);
   });
 
+  it("keeps a measured, dispersed sub-20% distribution at LOW severity", async () => {
+    const result = await deployerHistoryDetector.run(
+      {
+        deployerHistory: null,
+        bytecodeReuse: null,
+        relatedWalletEdges: Array.from({ length: 10 }, (_, index) => ({
+          type: "TRANSFERRED_SUPPLY_TO" as const,
+          address:
+            `0x00000000000000000000000000000000000000${(20 + index).toString(16)}` as `0x${string}`,
+          confidence: "HIGH" as const,
+          evidence: "Previous owner transferred supply to this wallet.",
+          source: "erc20-transfer-log-scan",
+          holdingPct: 1.35
+        }))
+      },
+      context
+    );
+
+    expect(
+      result.findings.find((finding) => finding.code === "SUPPLY_TRANSFERRED_TO_WALLET")
+    ).toMatchObject({ severity: "LOW" });
+  });
+
   it("reports a FUNDED_BY edge as informational, not a risk verdict", async () => {
     const result = await deployerHistoryDetector.run(
       {
@@ -1598,7 +1643,7 @@ describe("risk scoring", () => {
       score: 60,
       level: "HIGH",
       confidence: "MEDIUM",
-      scoringVersion: "0.3.0-renounced-owner-control-neutralization"
+      scoringVersion: "0.4.0-context-aware-clone-and-distribution-risk"
     });
     expect(assessment.categoryScores[0]).toMatchObject({
       category: "CONTRACT_CONTROL",

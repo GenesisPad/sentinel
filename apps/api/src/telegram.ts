@@ -36,6 +36,10 @@ import {
 export type TelegramSubmitScan = (input: SubmitScanInput) => Promise<ScanProgress>;
 export type TelegramGetScan = (scanId: string) => Promise<ScanProgress | null>;
 export type TelegramGetScanResult = (scanId: string) => Promise<ScanResultView | null>;
+export type TelegramGetLatestScanResult = (
+  chainId: number,
+  address: `0x${string}`
+) => Promise<ScanResultView | null>;
 export type TelegramTrackAddress = (
   input: TrackTelegramAddressInput
 ) => Promise<{ item: TrackedTelegramAddress; created: boolean }>;
@@ -178,6 +182,7 @@ export function createTelegramBot(options: {
   submitScan: TelegramSubmitScan;
   getScan: TelegramGetScan;
   getScanResult: TelegramGetScanResult;
+  getLatestScanResult?: TelegramGetLatestScanResult;
   trackAddress?: TelegramTrackAddress;
   untrackAddress?: TelegramUntrackAddress;
   listTrackedAddresses?: TelegramListTrackedAddresses;
@@ -413,13 +418,12 @@ export function createTelegramBot(options: {
     if (context.callbackQuery) await context.answerCallbackQuery();
   };
 
-  bot.command("stats", async (context) => {
+  const showAdminStats = async (context: Context, replace: boolean) => {
     if (!(await requireAdmin(context))) return;
     if (!options.getAdminAnalytics)
       return void (await context.reply("⚠️ Admin analytics are not configured."));
     const stats = await options.getAdminAnalytics();
-    await context.reply(
-      [
+    const text = [
         "📊 <b>Genesis Sentinel Stats</b>",
         "",
         `👤 Telegram users: <b>${stats.users.toLocaleString("en-US")}</b>`,
@@ -437,10 +441,17 @@ export function createTelegramBot(options: {
         "<b>Activity by source</b>",
         `🌐 Web page views: <b>${stats.webActivities.toLocaleString("en-US")}</b>`,
         `🤖 Telegram interactions: <b>${stats.telegramActivities.toLocaleString("en-US")}</b>`
-      ].join("\n"),
-      { parse_mode: "HTML", reply_markup: adminChartsMenuKeyboard() }
-    );
-  });
+      ].join("\n");
+    const replyMarkup = adminChartsMenuKeyboard(true);
+    if (replace) {
+      await context.editMessageText(text, { parse_mode: "HTML", reply_markup: replyMarkup });
+      await context.answerCallbackQuery({ text: "Stats refreshed." });
+      return;
+    }
+    await context.reply(text, { parse_mode: "HTML", reply_markup: replyMarkup });
+  };
+  bot.command("stats", (context) => showAdminStats(context, false));
+  bot.callbackQuery("adminstats", (context) => showAdminStats(context, true));
   bot.command("charts", async (context) => {
     if (!(await requireAdmin(context))) return;
     await context.reply("📈 <b>Admin Charts</b>\n\nChoose an operational view.", {
@@ -646,7 +657,59 @@ export function createTelegramBot(options: {
     }
 
     const tracked = await options.listTrackedAddresses(chat);
-    await context.reply(formatTelegramTrackedListReply(tracked));
+    await context.reply(formatTelegramTrackedListReply(tracked), {
+      reply_markup: createTelegramTrackedListKeyboard(tracked)
+    });
+  });
+
+  bot.callbackQuery(/^trackedview:(0x[a-fA-F0-9]{40})$/u, async (context) => {
+    const address = context.match[1]?.toLowerCase() as `0x${string}`;
+    const result = options.getLatestScanResult
+      ? await options.getLatestScanResult(4663, address)
+      : null;
+    if (!result) {
+      await context.answerCallbackQuery({ text: "No completed scan was found. Use Rescan." });
+      return;
+    }
+
+    await context.reply(formatTelegramResultReply(result), {
+      parse_mode: "Markdown",
+      reply_markup: createTelegramResultKeyboard(
+        rememberTelegramCallbackScanId(callbackRegistry, result.scan.scanId),
+        resolveChartUrl(result),
+        options.webAppUrl ? telegramFullReportUrl(options.webAppUrl, result) : undefined
+      )
+    });
+    await context.answerCallbackQuery({ text: "Latest result opened." });
+  });
+
+  bot.callbackQuery(/^trackedrescan:(0x[a-fA-F0-9]{40})$/u, async (context) => {
+    if (!context.chat) {
+      await context.answerCallbackQuery({ text: "This chat is unavailable." });
+      return;
+    }
+    const address = context.match[1]?.toLowerCase() as `0x${string}`;
+    const limit = checkTelegramRateLimit(
+      options.scanLimiter,
+      options.groupScanLimiter,
+      context.chat,
+      context.from?.id
+    );
+    if (!limit.allowed) {
+      await context.answerCallbackQuery({
+        text: `Try again in ${limit.retryAfterSeconds}s.`
+      });
+      return;
+    }
+
+    await context.answerCallbackQuery({ text: "Fresh scan started." });
+    await submitScanAndReply({
+      address,
+      chatId: context.chat.id,
+      fromId: context.from?.id,
+      telegramChat: context.chat,
+      forceFresh: true
+    });
   });
 
   bot.callbackQuery(/^rescan:(.+)$/u, async (context) => {
@@ -1091,8 +1154,27 @@ export function formatTelegramTrackedListReply(items: TrackedTelegramAddress[]):
 
   return [
     `📌 Tracked CAs (${items.length})`,
-    ...items.map((item, index) => `${index + 1}. ${item.address} | chain ${item.chainId}`)
+    ...items.map(
+      (item, index) => `${index + 1}. ${item.address} | ${telegramChainName(item.chainId)}`
+    )
   ].join("\n");
+}
+
+export function createTelegramTrackedListKeyboard(
+  items: TrackedTelegramAddress[]
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  items.forEach((item, index) => {
+    keyboard
+      .text(`${index + 1}. 📋 View Result`, `trackedview:${item.address}`)
+      .text(`${index + 1}. 🔁 Rescan`, `trackedrescan:${item.address}`)
+      .row();
+  });
+  return keyboard;
+}
+
+function telegramChainName(chainId: number): string {
+  return chainId === 4663 ? "Robinhood" : `Chain ${chainId}`;
 }
 
 export function formatTelegramResultReply(result: ScanResultView): string {
@@ -1202,14 +1284,17 @@ export function telegramFullReportUrl(webAppUrl: string, result: ScanResultView)
   return `${webAppUrl.replace(/\/+$/u, "")}/token/robinhood/${result.scan.address}`;
 }
 
-function adminChartsMenuKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
+function adminChartsMenuKeyboard(includeStatsRefresh = false): InlineKeyboard {
+  const keyboard = new InlineKeyboard()
     .text("👤 Registered users", "adminusers:1")
     .row()
     .text("⚡ Activity", "admincharts:activity")
     .text("🔎 Scans", "admincharts:scans")
     .row()
     .text("👤 User growth", "admincharts:users");
+  return includeStatsRefresh
+    ? keyboard.row().text("🔄 Refresh Stats", "adminstats")
+    : keyboard;
 }
 
 export function formatTelegramRegisteredUsers(result: TelegramRegisteredUsersPage): string {

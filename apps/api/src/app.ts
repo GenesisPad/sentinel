@@ -248,7 +248,7 @@ export async function buildApp({
         const page = Math.min(Math.max(1, requestedPage), totalPages);
         const users = await prisma.telegramUser.findMany({
           select: { telegramUserId: true, username: true, createdAt: true },
-          orderBy: { createdAt: "asc" },
+          orderBy: { createdAt: "desc" },
           skip: (page - 1) * pageSize,
           take: pageSize
         });
@@ -399,6 +399,7 @@ export async function buildApp({
         submitScan,
         getScan: (scanId) => scans.getScan(scanId),
         getScanResult: (scanId) => scans.getScanResult(scanId),
+        getLatestScanResult: (chainId, address) => scans.getLatestScanResult(chainId, address),
         refreshScanResult: async (scanId) => {
           const result = await scans.getScanResult(scanId);
           return result ? refreshVolatileFields(result) : null;

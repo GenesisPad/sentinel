@@ -6,6 +6,7 @@ import {
   createTelegramResultKeyboard,
   createTelegramScanLimiter,
   createTelegramSectionKeyboard,
+  createTelegramTrackedListKeyboard,
   formatScanStageMessage,
   formatTelegramProgressReply,
   formatTelegramRateLimitReply,
@@ -234,15 +235,25 @@ describe("telegram scan helpers", () => {
       formatTelegramUntrackReply("0x0000000000000000000000000000000000000001", true)
     ).toContain("Stopped tracking");
     expect(formatTelegramTrackedListReply([])).toContain("No CAs are tracked");
-    expect(
-      formatTelegramTrackedListReply([
-        {
-          chainId: 4663,
-          address: "0x0000000000000000000000000000000000000001",
-          createdAt: "2026-07-11T00:00:00.000Z"
-        }
-      ])
-    ).toContain("Tracked CAs (1)");
+    const tracked = [
+      {
+        chainId: 4663,
+        address: "0x0000000000000000000000000000000000000001" as const,
+        createdAt: "2026-07-11T00:00:00.000Z"
+      }
+    ];
+    const reply = formatTelegramTrackedListReply(tracked);
+    expect(reply).toContain("Tracked CAs (1)");
+    expect(reply).toContain("Robinhood");
+    expect(reply).not.toContain("chain 4663");
+
+    const callbacks = createTelegramTrackedListKeyboard(tracked).inline_keyboard
+      .flat()
+      .map((button) => ("callback_data" in button ? button.callback_data : null));
+    expect(callbacks).toEqual([
+      "trackedview:0x0000000000000000000000000000000000000001",
+      "trackedrescan:0x0000000000000000000000000000000000000001"
+    ]);
   });
 
   it("formats result summaries without claiming a guarantee", () => {

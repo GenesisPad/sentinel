@@ -2,7 +2,7 @@
 
 - Detector ID: `deployer-history`
 - Version: `0.1.0`
-- Finding codes: `DEPLOYER_PRIOR_SCAN_HISTORY` (`INFO`/`MEDIUM`/`HIGH`), `BYTECODE_REUSED_ACROSS_SCANS` (`MEDIUM`)
+- Finding codes: `DEPLOYER_PRIOR_SCAN_HISTORY` (`INFO`/`MEDIUM`/`HIGH`), `BYTECODE_REUSED_ACROSS_SCANS` (`INFO`)
 - Evidence: Sentinel's own persisted scan history (`EXTERNAL_SOURCE`/`BYTECODE` evidence types).
 
 Builds deployer and wallet intelligence entirely from **Sentinel's own prior scan history** —
@@ -25,7 +25,7 @@ summary alone, per the project rule against labeling a wallet malicious solely f
 deployed multiple contracts.
 
 Bytecode reuse is reported neutrally: identical bytecode can mean a shared, audited template
-(e.g. a launchpad's standard token contract) or a cloned scam factory — the finding says so and
+(e.g. a launchpad's standard token contract) or a cloned scam factory — the informational finding says so and
 points at the other addresses for manual comparison.
 
 When no deployer address is known for this scan, the detector reports

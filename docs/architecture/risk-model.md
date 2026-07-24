@@ -51,7 +51,11 @@ Scoring version history:
 
 - `0.1.0-finding-weighted` — initial per-finding severity/confidence weighting, max-of-category
   overall score.
-- `0.3.0-renounced-owner-control-neutralization` (current) — owner-dependent control-surface
+- `0.4.0-context-aware-clone-and-distribution-risk` (current) — canonical EIP-1167 clone
+  `DELEGATECALL` and shared bytecode are informational rather than standalone risk evidence;
+  measured supply distributions below 20% aggregate with no recipient at or above 5% are `LOW`
+  rather than `MEDIUM`.
+- `0.3.0-renounced-owner-control-neutralization` — owner-dependent control-surface
   findings are excluded when ownership is verifiably renounced, unless separate evidence shows
   a surviving proxy admin, role, hidden recovery path, obfuscated authority, or external gate.
 - `0.2.0-category-weighted-with-gap-reasons` (Milestone 7) — same weighting and

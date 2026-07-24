@@ -136,7 +136,7 @@ interface SelectorRule {
 }
 
 const detectorVersion = "0.1.0";
-export const scoringVersion = "0.3.0-renounced-owner-control-neutralization";
+export const scoringVersion = "0.4.0-context-aware-clone-and-distribution-risk";
 export const simulationFoundationVersion = "0.1.0-unsupported";
 export const liquidityDiscoveryFoundationVersion = "0.1.0-unsupported";
 export const holderAnalysisFoundationVersion = "0.1.0-unsupported";
@@ -592,6 +592,15 @@ function scanOpcodes(bytecode: `0x${string}`): Set<number> {
 
 const delegatecallOpcode = 0xf4;
 const selfdestructOpcode = 0xff;
+const eip1167RuntimePattern =
+  /^0x363d3d373d3d3d363d73([a-fA-F0-9]{40})5af43d82803e903d91602b57fd5bf3$/u;
+
+export function eip1167ImplementationAddress(
+  bytecode: `0x${string}`
+): `0x${string}` | null {
+  const match = eip1167RuntimePattern.exec(bytecode);
+  return match?.[1] ? `0x${match[1].toLowerCase()}` : null;
+}
 
 /**
  * Scans runtime bytecode for the DELEGATECALL and SELFDESTRUCT opcodes by walking the actual
@@ -612,13 +621,38 @@ export const dangerousOpcodeDetector: SecurityDetector<BytecodeDetectorInput> = 
     const opcodes = scanOpcodes(input.bytecode);
     const hasDelegatecall = opcodes.has(delegatecallOpcode);
     const hasSelfdestruct = opcodes.has(selfdestructOpcode);
+    const minimalProxyImplementation = eip1167ImplementationAddress(input.bytecode);
     const evidence = bytecodeEvidence(context, input.bytecode, {
       hasDelegatecall,
-      hasSelfdestruct
+      hasSelfdestruct,
+      ...(minimalProxyImplementation
+        ? {
+            proxyType: "EIP-1167",
+            implementationAddress: minimalProxyImplementation
+          }
+        : {})
     });
 
     const findings: SecurityFinding[] = [];
-    if (hasDelegatecall) {
+    if (minimalProxyImplementation) {
+      findings.push(
+        createFinding({
+          code: "EIP1167_MINIMAL_PROXY_DETECTED",
+          detector: this.metadata,
+          title: "Standard EIP-1167 minimal proxy detected",
+          severity: "INFO",
+          category: "CONTRACT_CONTROL",
+          confidence: "HIGH",
+          description:
+            "This contract uses the standard EIP-1167 minimal-proxy runtime and delegates execution to a fixed implementation address.",
+          technicalExplanation:
+            "DELEGATECALL is expected in the canonical EIP-1167 runtime. The implementation address is embedded in this clone's bytecode, so opcode presence alone is not evidence of owner-controlled upgrades.",
+          evidence: [evidence],
+          recommendation:
+            "Review the fixed implementation contract for token logic and privileged controls."
+        })
+      );
+    } else if (hasDelegatecall) {
       findings.push(
         createFinding({
           code: "DELEGATECALL_OPCODE_PRESENT",
@@ -661,9 +695,17 @@ export const dangerousOpcodeDetector: SecurityDetector<BytecodeDetectorInput> = 
       detector: this.metadata,
       checks: [
         {
-          code: findings.length > 0 ? "DANGEROUS_OPCODES_DETECTED" : "DANGEROUS_OPCODES_ABSENT",
-          outcome: findings.length > 0 ? "DETECTED" : "PASSED",
-          confidence: "MEDIUM",
+          code: minimalProxyImplementation
+            ? "EIP1167_MINIMAL_PROXY_DETECTED"
+            : findings.length > 0
+              ? "DANGEROUS_OPCODES_DETECTED"
+              : "DANGEROUS_OPCODES_ABSENT",
+          outcome: minimalProxyImplementation
+            ? "PASSED"
+            : findings.length > 0
+              ? "DETECTED"
+              : "PASSED",
+          confidence: minimalProxyImplementation ? "HIGH" : "MEDIUM",
           evidence: [evidence]
         }
       ],
@@ -1801,6 +1843,7 @@ export const genesispadLaunchDetector: SecurityDetector<GenesisPadLaunchDetector
 export interface DeployerHistoryDetectorInput {
   deployerHistory: DeployerHistoryView | null;
   bytecodeReuse: BytecodeReuseView | null;
+  isMinimalProxy?: boolean;
   /** Fully assembled wallet-relationship edges (DEPLOYED_BY/OWNED_BY/SHARED_BYTECODE plus any
    * FUNDED_BY/TRANSFERRED_SUPPLY_TO edges found via on-chain scans) — see
    * @genesis-sentinel/providers' wallet-clustering.ts for how the latter two are derived. */
@@ -1919,16 +1962,20 @@ export const deployerHistoryDetector: SecurityDetector<DeployerHistoryDetectorIn
         createFinding({
           code: "BYTECODE_REUSED_ACROSS_SCANS",
           detector: this.metadata,
-          title: "Contract bytecode matches other contracts scanned by Sentinel",
-          severity: "MEDIUM",
+          title: input.isMinimalProxy
+            ? "Minimal-proxy template matches another scanned contract"
+            : "Contract bytecode matches other contracts scanned by Sentinel",
+          severity: "INFO",
           category: "REPUTATION_RISK",
           confidence: "HIGH",
-          description: `This contract's runtime bytecode is byte-for-byte identical to ${input.bytecodeReuse.reusedByCount} other contract(s) Sentinel has scanned on this chain.`,
+          description: input.isMinimalProxy
+            ? `This EIP-1167 clone uses the same minimal-proxy runtime as ${input.bytecodeReuse.reusedByCount} other contract(s) Sentinel has scanned. Shared clone bytecode is expected and is not a risk verdict.`
+            : `This contract's runtime bytecode is byte-for-byte identical to ${input.bytecodeReuse.reusedByCount} other contract(s) Sentinel has scanned on this chain. Shared bytecode alone is not a risk verdict.`,
           technicalExplanation:
-            "Computed by comparing this contract's SHA-256 runtime bytecode hash against Contract.bytecodeHash across Sentinel's own persisted scan history for this chain.",
+            "Computed by comparing this contract's SHA-256 runtime bytecode hash against Contract.bytecodeHash across Sentinel's own persisted scan history for this chain. A match establishes shared code, not shared intent or risk.",
           evidence: [evidence],
           recommendation:
-            "Identical bytecode can mean a shared, audited template (e.g. a token launchpad's standard contract) or a cloned scam factory — review the other addresses in evidence to tell which."
+            "Review corroborating evidence about the implementation, deployer, and privileged controls; do not treat shared bytecode alone as suspicious."
         })
       );
       checks.push({
@@ -1968,6 +2015,21 @@ export const deployerHistoryDetector: SecurityDetector<DeployerHistoryDetectorIn
         (edge) => edge.type === "TRANSFERRED_SUPPLY_TO"
       );
       if (supplyTransferEdges.length > 0) {
+        const measuredHoldingPercentages = supplyTransferEdges
+          .map((edge) => edge.holdingPct)
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+        const aggregateHoldingPct = measuredHoldingPercentages.reduce(
+          (total, value) => total + value,
+          0
+        );
+        const largestHoldingPct =
+          measuredHoldingPercentages.length > 0 ? Math.max(...measuredHoldingPercentages) : null;
+        const distributionSeverity: FindingSeverity =
+          measuredHoldingPercentages.length === supplyTransferEdges.length &&
+          aggregateHoldingPct < 20 &&
+          (largestHoldingPct ?? 0) < 5
+            ? "LOW"
+            : "MEDIUM";
         const supplyTransferEvidence: FindingEvidence = {
           type: "EXTERNAL_SOURCE",
           summary: "Supply transfers from the deployer to other wallets, never timing coincidence",
@@ -1985,14 +2047,17 @@ export const deployerHistoryDetector: SecurityDetector<DeployerHistoryDetectorIn
               supplyTransferEdges.length === 1
                 ? "Deployer transferred a significant share of supply to another wallet"
                 : `Deployer transferred supply to ${supplyTransferEdges.length} other wallets`,
-            severity: "MEDIUM",
+            severity: distributionSeverity,
             category: "DISTRIBUTION_RISK",
             confidence: strongestConfidence(supplyTransferEdges.map((edge) => edge.confidence)),
             description:
               supplyTransferEdges.length === 1
                 ? `${supplyTransferEdges[0]?.evidence} (${supplyTransferEdges[0]?.address})`
                 : `The deployer transferred supply to ${supplyTransferEdges.length} other wallets. See evidence for each recipient and its share.`,
-            technicalExplanation: "Edge type TRANSFERRED_SUPPLY_TO, source: erc20-transfer-log-scan.",
+            technicalExplanation:
+              measuredHoldingPercentages.length === supplyTransferEdges.length
+                ? `Edge type TRANSFERRED_SUPPLY_TO, source: erc20-transfer-log-scan. Recipients currently hold ${aggregateHoldingPct.toFixed(2)}% in aggregate; the largest holds ${(largestHoldingPct ?? 0).toFixed(2)}%. Distribution below 20% aggregate with no recipient at or above 5% is LOW severity; larger distributions remain MEDIUM.`
+                : "Edge type TRANSFERRED_SUPPLY_TO, source: erc20-transfer-log-scan. Current holding percentages were not available for every recipient, so the distribution remains MEDIUM severity.",
             evidence: [supplyTransferEvidence],
             recommendation:
               "Review each recipient in evidence: is it a known team/vesting/exchange wallet, a legitimate early buyer, or an unexplained large holder?"

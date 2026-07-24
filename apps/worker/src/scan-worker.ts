@@ -25,6 +25,7 @@ import {
   createUnsupportedLiquidityDiscovery,
   createUnsupportedTradeSimulations,
   deployerHistoryDetector,
+  eip1167ImplementationAddress,
   genesispadLaunchDetector,
   dexInteractionSurfaceDetector,
   ledgerIntegrityDetector,
@@ -1311,20 +1312,24 @@ export async function processScanJob(
         blockNumber
       }
     );
+    // EIP-1167 clones contain only a tiny delegation stub; their actual token logic and ABI live
+    // at the immutable implementation address embedded in runtime bytecode. Analyse that verified
+    // implementation source while continuing to execute live reads against the clone address.
+    const sourceAnalysisAddress = eip1167ImplementationAddress(bytecode) ?? target.address;
     const sourceProfile: ContractSourceDetectorInput = providers
       ? await providers.source
-          .getContractSource({ chainId: target.chainId, address: target.address })
+          .getContractSource({ chainId: target.chainId, address: sourceAnalysisAddress })
           .catch(
             () =>
               ({
                 status: "UNAVAILABLE",
-                address: target.address,
+                address: sourceAnalysisAddress,
                 sourceFiles: []
               }) satisfies ContractSourceDetectorInput
           )
       : ({
           status: "UNAVAILABLE",
-          address: target.address,
+          address: sourceAnalysisAddress,
           sourceFiles: []
         } satisfies ContractSourceDetectorInput);
     const detectorRunContext = {
@@ -1438,7 +1443,12 @@ export async function processScanJob(
       knownPoolAddresses: knownInfrastructureAddresses
     });
     const deployerHistoryResult = await deployerHistoryDetector.run(
-      { deployerHistory, bytecodeReuse, relatedWalletEdges },
+      {
+        deployerHistory,
+        bytecodeReuse,
+        relatedWalletEdges,
+        isMinimalProxy: eip1167ImplementationAddress(bytecode) !== null
+      },
       detectorRunContext
     );
     const dexInteractionResult = await dexInteractionSurfaceDetector.run(
