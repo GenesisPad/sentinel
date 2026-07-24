@@ -5,6 +5,7 @@ import {
   buildDexScreenerUrl,
   buildMarketChartUrl,
   buildTokenSecuritySummary,
+  chainMarketSlug,
   createHealth,
   createScanId,
   formatCompactUsd,
@@ -116,9 +117,27 @@ describe("formatHumanDateTime", () => {
 
 describe("buildDexScreenerUrl", () => {
   it("builds a Robinhood Chain DexScreener pair URL", () => {
-    expect(buildDexScreenerUrl("0x10cc6bd38112cac182db90b6a71d8bb5939526ba")).toBe(
+    expect(buildDexScreenerUrl("robinhood", "0x10cc6bd38112cac182db90b6a71d8bb5939526ba")).toBe(
       "https://dexscreener.com/robinhood/0x10cc6bd38112cac182db90b6a71d8bb5939526ba"
     );
+  });
+
+  it("builds an Arc Chain DexScreener pair URL", () => {
+    expect(buildDexScreenerUrl("arc", "0x10cc6bd38112cac182db90b6a71d8bb5939526ba")).toBe(
+      "https://dexscreener.com/arc/0x10cc6bd38112cac182db90b6a71d8bb5939526ba"
+    );
+  });
+});
+
+describe("chainMarketSlug", () => {
+  it("maps every chain the API implements to the slug DexScreener/GeckoTerminal/the web app share", () => {
+    expect(chainMarketSlug(4663)).toBe("robinhood");
+    expect(chainMarketSlug(5042)).toBe("arc");
+    expect(chainMarketSlug(988)).toBe("stable");
+  });
+
+  it("falls back to the numeric chain id for an unrecognized chain", () => {
+    expect(chainMarketSlug(1)).toBe("1");
   });
 });
 
@@ -132,8 +151,14 @@ describe("formatSupplyPercentage", () => {
 
 describe("buildMarketChartUrl", () => {
   it("builds a Robinhood Chain GeckoTerminal pool URL", () => {
-    expect(buildMarketChartUrl("0x10cc6bd38112cac182db90b6a71d8bb5939526ba")).toBe(
+    expect(buildMarketChartUrl("robinhood", "0x10cc6bd38112cac182db90b6a71d8bb5939526ba")).toBe(
       "https://www.geckoterminal.com/robinhood/pools/0x10cc6bd38112cac182db90b6a71d8bb5939526ba"
+    );
+  });
+
+  it("builds a Stable Chain GeckoTerminal pool URL", () => {
+    expect(buildMarketChartUrl("stable", "0x10cc6bd38112cac182db90b6a71d8bb5939526ba")).toBe(
+      "https://www.geckoterminal.com/stable/pools/0x10cc6bd38112cac182db90b6a71d8bb5939526ba"
     );
   });
 });

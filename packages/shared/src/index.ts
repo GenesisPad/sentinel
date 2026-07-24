@@ -1520,12 +1520,21 @@ export function formatHumanDateTime(iso: string | null | undefined): string | nu
   }).format(date);
 }
 
-/** Robinhood Chain is the only chain implemented end-to-end today (see telegramFullReportUrl and
- * every other Robinhood-only assumption already baked into this package) — safe to hardcode
- * DexScreener's "robinhood" network slug rather than needing a numeric-to-slug chain registry
- * just for this one link. */
-export function buildDexScreenerUrl(pairAddress: string): string {
-  return `https://dexscreener.com/robinhood/${pairAddress}`;
+/** Chain slug shared by DexScreener, GeckoTerminal, and the web app's own `/token/{slug}/...`
+ * route (see apps/web/src/lib/chains.ts) for every chain Genesis Sentinel supports end-to-end.
+ * Falls back to the numeric chain id for anything not in this list rather than guessing a slug
+ * that would silently 404. */
+export function chainMarketSlug(chainId: number): string {
+  const slugs: Record<number, string> = {
+    4663: "robinhood",
+    5042: "arc",
+    988: "stable"
+  };
+  return slugs[chainId] ?? String(chainId);
+}
+
+export function buildDexScreenerUrl(chainSlug: string, pairAddress: string): string {
+  return `https://dexscreener.com/${chainSlug}/${pairAddress}`;
 }
 
 /** Formats supply ownership without rounding a real sub-0.01% balance down to zero. */
@@ -1535,7 +1544,8 @@ export function formatSupplyPercentage(value: number, maximumFractionDigits = 2)
   return `${value.toFixed(maximumFractionDigits)}%`;
 }
 
-/** GeckoTerminal currently indexes Robinhood pools that DexScreener's API does not yet return. */
-export function buildMarketChartUrl(pairAddress: string): string {
-  return `https://www.geckoterminal.com/robinhood/pools/${pairAddress}`;
+/** GeckoTerminal indexes pools DexScreener's API doesn't always return yet, so this is kept as a
+ * fallback chart link alongside buildDexScreenerUrl. */
+export function buildMarketChartUrl(chainSlug: string, pairAddress: string): string {
+  return `https://www.geckoterminal.com/${chainSlug}/pools/${pairAddress}`;
 }

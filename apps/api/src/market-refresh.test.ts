@@ -76,7 +76,7 @@ function createResult(): ScanResultView {
 
 describe("createMarketRefresher", () => {
   it("returns the result unchanged when the live lookup finds no profile", async () => {
-    const refresh = createMarketRefresher(createProvider(null));
+    const refresh = createMarketRefresher(() => createProvider(null));
     const original = createResult();
 
     const refreshed = await refresh(original);
@@ -93,12 +93,34 @@ describe("createMarketRefresher", () => {
         throw new Error("network error");
       }
     };
-    const refresh = createMarketRefresher(provider);
+    const refresh = createMarketRefresher(() => provider);
     const original = createResult();
 
     const refreshed = await refresh(original);
 
     expect(refreshed).toEqual(original);
+  });
+
+  it("returns the result unchanged when no market provider is resolvable for the chain", async () => {
+    const refresh = createMarketRefresher(() => null);
+    const original = createResult();
+
+    const refreshed = await refresh(original);
+
+    expect(refreshed).toEqual(original);
+  });
+
+  it("resolves the provider for the scan result's own chain, not a fixed chain", async () => {
+    const seenChainIds: number[] = [];
+    const refresh = createMarketRefresher((chainId) => {
+      seenChainIds.push(chainId);
+      return createProvider(null);
+    });
+    const arcResult = { ...createResult(), token: { ...createResult().token, chainId: 5042 } };
+
+    await refresh(arcResult);
+
+    expect(seenChainIds).toEqual([5042]);
   });
 
   it("overwrites price, market cap, volume, and dex-paid while leaving everything else untouched", async () => {
@@ -114,7 +136,7 @@ describe("createMarketRefresher", () => {
       pairCreatedAt: null,
       dexPaid: true
     };
-    const refresh = createMarketRefresher(createProvider(profile));
+    const refresh = createMarketRefresher(() => createProvider(profile));
     const original = createResult();
 
     const refreshed = await refresh(original);
@@ -145,7 +167,7 @@ describe("createMarketRefresher", () => {
       pairCreatedAt: null,
       dexPaid: null
     };
-    const refresh = createMarketRefresher(createProvider(profile));
+    const refresh = createMarketRefresher(() => createProvider(profile));
     const original = createResult();
 
     const refreshed = await refresh(original);

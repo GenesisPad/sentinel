@@ -204,7 +204,7 @@ function TraderSections({ report }: { report: ScanReport }) {
       </Section>
 
       <Section id="liquidity" title="Liquidity">
-        <div className="max-w-xl"><LiquidityCard liquidity={report.liquidity} /></div>
+        <div className="max-w-xl"><LiquidityCard liquidity={report.liquidity} chainId={report.token.chainId} /></div>
       </Section>
 
       <Section id="holders" title="Holder concentration" subtitle="Excluding pools">
@@ -247,7 +247,7 @@ function TechnicalSections({ report }: { report: ScanReport }) {
       </Section>
 
       <Section id="liquidity" title="Liquidity pool">
-        <div className="max-w-xl"><LiquidityCard liquidity={report.liquidity} technical /></div>
+        <div className="max-w-xl"><LiquidityCard liquidity={report.liquidity} chainId={report.token.chainId} technical /></div>
       </Section>
 
       <Section id="holders" title="Holder analysis" subtitle="Excluding pools">

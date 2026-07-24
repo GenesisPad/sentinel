@@ -1,5 +1,6 @@
 import { ExternalLink, Info } from "lucide-react";
 import { buildMarketChartUrl } from "@genesis-sentinel/shared";
+import type { ChainId } from "@/lib/chains";
 import type { LiquidityInfo } from "@/lib/types";
 import { formatUsd, shortAddress } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
@@ -11,7 +12,15 @@ const HEALTH_TIER_STYLE = {
   healthy: { label: "Healthy", hex: "#37d67a" }
 } as const;
 
-export function LiquidityCard({ liquidity, technical }: { liquidity: LiquidityInfo; technical?: boolean }) {
+export function LiquidityCard({
+  liquidity,
+  chainId,
+  technical
+}: {
+  liquidity: LiquidityInfo;
+  chainId: ChainId;
+  technical?: boolean;
+}) {
   if (liquidity.locked == null && liquidity.totalUsd == null) {
     return (
       <EmptyState
@@ -114,7 +123,7 @@ export function LiquidityCard({ liquidity, technical }: { liquidity: LiquidityIn
       ) : null}
       {liquidity.poolAddress ? (
         <a
-          href={buildMarketChartUrl(liquidity.poolAddress)}
+          href={buildMarketChartUrl(chainId, liquidity.poolAddress)}
           target="_blank"
           rel="noopener noreferrer"
           className="mt-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-border-strong bg-surface-deep px-3 py-2 text-sm font-bold text-primary transition-colors hover:bg-surface"

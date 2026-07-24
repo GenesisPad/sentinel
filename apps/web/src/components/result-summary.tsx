@@ -160,7 +160,7 @@ export function ResultSummary({ report, onFresh, freshBusy = false }: { report: 
           <Card>
             <CardContent>
               <h3 className="mb-3.5 font-display text-base font-semibold">Liquidity overview</h3>
-              <LiquidityCard liquidity={report.liquidity} />
+              <LiquidityCard liquidity={report.liquidity} chainId={report.token.chainId} />
             </CardContent>
           </Card>
         </div>

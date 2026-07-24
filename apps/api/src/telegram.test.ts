@@ -251,8 +251,29 @@ describe("telegram scan helpers", () => {
       .flat()
       .map((button) => ("callback_data" in button ? button.callback_data : null));
     expect(callbacks).toEqual([
-      "trackedview:0x0000000000000000000000000000000000000001",
-      "trackedrescan:0x0000000000000000000000000000000000000001"
+      "trackedview:4663:0x0000000000000000000000000000000000000001",
+      "trackedrescan:4663:0x0000000000000000000000000000000000000001"
+    ]);
+  });
+
+  it("labels non-Robinhood tracked CAs with their own chain name, not a generic fallback", () => {
+    const tracked = [
+      {
+        chainId: 5042,
+        address: "0x0000000000000000000000000000000000000002" as const,
+        createdAt: "2026-07-11T00:00:00.000Z"
+      }
+    ];
+    const reply = formatTelegramTrackedListReply(tracked);
+    expect(reply).toContain("Arc Chain");
+    expect(reply).not.toContain("Chain 5042");
+
+    const callbacks = createTelegramTrackedListKeyboard(tracked).inline_keyboard
+      .flat()
+      .map((button) => ("callback_data" in button ? button.callback_data : null));
+    expect(callbacks).toEqual([
+      "trackedview:5042:0x0000000000000000000000000000000000000002",
+      "trackedrescan:5042:0x0000000000000000000000000000000000000002"
     ]);
   });
 
@@ -409,6 +430,59 @@ describe("telegram scan helpers", () => {
     );
     const deployerLine = reply.split("\n").find((line) => line.includes("Deployer:"));
     expect(deployerLine).toContain("0x8cfa...b561");
+  });
+
+  it("links a non-Robinhood chain's deployer address to that chain's own explorer, not Robinhood's", () => {
+    const result: ScanResultView = {
+      scan: {
+        scanId: "scan-arc",
+        chainId: 5042,
+        address: "0x0000000000000000000000000000000000000005",
+        state: "COMPLETED",
+        scannerVersion: "0.1.0-foundation",
+        submittedAt: "2026-07-19T00:00:00.000Z",
+        message: "Scan state is COMPLETED."
+      },
+      token: {
+        chainId: 5042,
+        address: "0x0000000000000000000000000000000000000005",
+        deployerAddress: "0x8cfa84924011b19765136baea669ac81fe8bb561"
+      },
+      detectorChecks: [],
+      findings: [],
+      liquidity: {
+        status: "UNSUPPORTED",
+        pools: [],
+        message: "Liquidity discovery is not configured yet."
+      },
+      holders: {
+        status: "UNSUPPORTED",
+        snapshots: [],
+        message: "Holder analysis is not configured yet."
+      },
+      simulations: [],
+      risk: {
+        chainId: 5042,
+        address: "0x0000000000000000000000000000000000000005",
+        scannerVersion: "0.1.0-foundation",
+        status: "UNABLE_TO_ASSESS",
+        level: "UNABLE_TO_ASSESS",
+        score: null,
+        confidence: "LOW",
+        categoryScores: [],
+        findingContributions: [],
+        unableToAssessReasons: [],
+        findingCounts: { INFO: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 },
+        message: "No detector findings were produced for this scan."
+      }
+    };
+
+    const reply = formatTelegramResultReply(result);
+
+    expect(reply).toContain(
+      "Deployer: [0x8cfa...b561](https://arcscan.cc/address/0x8cfa84924011b19765136baea669ac81fe8bb561)"
+    );
+    expect(reply).not.toContain("robinhoodchain.blockscout.com");
   });
 
   it("escapes underscores in risk-level enum values, never breaking Telegram's Markdown parser", () => {
@@ -604,6 +678,55 @@ describe("telegram scan helpers", () => {
     ).toBeUndefined();
   });
 
+  it("builds the Chart button URL under the right DexScreener chain slug for a Stable Chain token", () => {
+    const result: ScanResultView = {
+      scan: {
+        scanId: "scan-stable",
+        chainId: 988,
+        address: "0x0000000000000000000000000000000000000006",
+        state: "COMPLETED",
+        scannerVersion: "0.1.0-foundation",
+        submittedAt: "2026-07-19T00:00:00.000Z",
+        message: "ok"
+      },
+      token: { chainId: 988, address: "0x0000000000000000000000000000000000000006" },
+      detectorChecks: [],
+      findings: [],
+      liquidity: {
+        status: "AVAILABLE",
+        pools: [
+          {
+            chainId: 988,
+            tokenAddress: "0x0000000000000000000000000000000000000006",
+            poolAddress: "0x10cc6bd38112cac182db90b6a71d8bb5939526ba",
+            liquidityData: { totalLiquidityUsd: 500_000 }
+          }
+        ],
+        message: "ok"
+      },
+      holders: { status: "UNSUPPORTED", snapshots: [], message: "n/a" },
+      simulations: [],
+      risk: {
+        chainId: 988,
+        address: "0x0000000000000000000000000000000000000006",
+        scannerVersion: "0.1.0-foundation",
+        status: "UNABLE_TO_ASSESS",
+        level: "UNABLE_TO_ASSESS",
+        score: null,
+        confidence: "LOW",
+        categoryScores: [],
+        findingContributions: [],
+        unableToAssessReasons: [],
+        findingCounts: { INFO: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 },
+        message: "n/a"
+      }
+    };
+
+    expect(resolveChartUrl(result)).toBe(
+      "https://dexscreener.com/stable/0x10cc6bd38112cac182db90b6a71d8bb5939526ba"
+    );
+  });
+
   it("adds a Full Report button linking to the web app when webAppUrl is configured", () => {
     const result: ScanResultView = {
       scan: {
@@ -654,6 +777,51 @@ describe("telegram scan helpers", () => {
     expect(fullReportButton && "url" in fullReportButton ? fullReportButton.url : undefined).toBe(
       url
     );
+  });
+
+  it("points the Full Report button at the web app's own chain-slug route for an Arc Chain token", () => {
+    const result: ScanResultView = {
+      scan: {
+        scanId: "scan-arc-report",
+        chainId: 5042,
+        address: "0x0000000000000000000000000000000000000007",
+        state: "COMPLETED",
+        scannerVersion: "0.1.0-foundation",
+        submittedAt: "2026-07-19T00:00:00.000Z",
+        message: "Scan state is COMPLETED."
+      },
+      token: { chainId: 5042, address: "0x0000000000000000000000000000000000000007" },
+      detectorChecks: [],
+      findings: [],
+      liquidity: {
+        status: "UNSUPPORTED",
+        pools: [],
+        message: "Liquidity discovery is not configured yet."
+      },
+      holders: {
+        status: "UNSUPPORTED",
+        snapshots: [],
+        message: "Holder analysis is not configured yet."
+      },
+      simulations: [],
+      risk: {
+        chainId: 5042,
+        address: "0x0000000000000000000000000000000000000007",
+        scannerVersion: "0.1.0-foundation",
+        status: "UNABLE_TO_ASSESS",
+        level: "UNABLE_TO_ASSESS",
+        score: null,
+        confidence: "LOW",
+        categoryScores: [],
+        findingContributions: [],
+        unableToAssessReasons: [],
+        findingCounts: { INFO: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 },
+        message: "No detector findings were produced for this scan."
+      }
+    };
+
+    const url = telegramFullReportUrl("https://sentinel.genesispad.app/", result);
+    expect(url).toBe(`https://sentinel.genesispad.app/token/arc/${result.scan.address}`);
   });
 
   it("omits the Taxes button (tax figures are already in the main summary) and includes emoji-labeled buttons", () => {

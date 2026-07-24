@@ -20,9 +20,19 @@ export type RefreshVolatileFields = (result: ScanResultView) => Promise<ScanResu
  * A failed or unavailable live lookup returns the result completely unchanged — a refresh that
  * can't get fresher data is not an error, it's a no-op, never a reason to blank out or guess at
  * a number the last real scan actually measured.
+ *
+ * Takes a per-chain resolver rather than a single provider — every supported chain (Robinhood,
+ * Arc, Stable, ...) has its own DexScreener network slug, so the right provider depends on which
+ * chain the scan result is actually for. A chain with no resolvable market provider is a no-op,
+ * same as a failed lookup.
  */
-export function createMarketRefresher(market: MarketDataProvider): RefreshVolatileFields {
+export function createMarketRefresher(
+  getMarketProvider: (chainId: number) => MarketDataProvider | null
+): RefreshVolatileFields {
   return async function refreshVolatileFields(result) {
+    const market = getMarketProvider(result.token.chainId);
+    if (!market) return result;
+
     const profile = await market
       .getMarketProfile({ chainId: result.token.chainId, address: result.token.address })
       .catch(() => null);

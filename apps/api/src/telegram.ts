@@ -1,7 +1,11 @@
 ﻿import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
-import { robinhoodChainBlockscoutUrl } from "@genesis-sentinel/chain-adapters";
+import {
+  arcChainBlockscoutUrl,
+  robinhoodChainBlockscoutUrl,
+  stableChainBlockscoutUrl
+} from "@genesis-sentinel/chain-adapters";
 import type {
   TelegramChatIdentity,
   TelegramGroupAlertMedia,
@@ -11,6 +15,7 @@ import type {
 import {
   buildDexScreenerUrl,
   buildTokenSecuritySummary,
+  chainMarketSlug,
   effectiveFindingsAfterOwnershipRenouncement,
   formatCompactUsd,
   formatHumanDateTime,
@@ -140,7 +145,9 @@ export function formatScanStageMessage(state: string, trackingLine: string | nul
  * yet, so the button can be omitted entirely. */
 export function resolveChartUrl(result: ScanResultView): string | undefined {
   const pool = selectPrimaryLiquidityPool(result.liquidity.pools);
-  return pool ? buildDexScreenerUrl(pool.poolAddress) : undefined;
+  return pool
+    ? buildDexScreenerUrl(chainMarketSlug(result.token.chainId), pool.poolAddress)
+    : undefined;
 }
 
 type TelegramChatLike = {
@@ -668,10 +675,11 @@ export function createTelegramBot(options: {
     });
   });
 
-  bot.callbackQuery(/^trackedview:(0x[a-fA-F0-9]{40})$/u, async (context) => {
-    const address = context.match[1]?.toLowerCase() as `0x${string}`;
+  bot.callbackQuery(/^trackedview:(\d+):(0x[a-fA-F0-9]{40})$/u, async (context) => {
+    const chainId = Number(context.match[1]);
+    const address = context.match[2]?.toLowerCase() as `0x${string}`;
     const result = options.getLatestScanResult
-      ? await options.getLatestScanResult(4663, address)
+      ? await options.getLatestScanResult(chainId, address)
       : null;
     if (!result) {
       await context.answerCallbackQuery({ text: "No completed scan was found. Use Rescan." });
@@ -689,12 +697,13 @@ export function createTelegramBot(options: {
     await context.answerCallbackQuery({ text: "Latest result opened." });
   });
 
-  bot.callbackQuery(/^trackedrescan:(0x[a-fA-F0-9]{40})$/u, async (context) => {
+  bot.callbackQuery(/^trackedrescan:(\d+):(0x[a-fA-F0-9]{40})$/u, async (context) => {
     if (!context.chat) {
       await context.answerCallbackQuery({ text: "This chat is unavailable." });
       return;
     }
-    const address = context.match[1]?.toLowerCase() as `0x${string}`;
+    const chainId = Number(context.match[1]);
+    const address = context.match[2]?.toLowerCase() as `0x${string}`;
     const limit = checkTelegramRateLimit(
       options.scanLimiter,
       options.groupScanLimiter,
@@ -714,7 +723,7 @@ export function createTelegramBot(options: {
       chatId: context.chat.id,
       fromId: context.from?.id,
       telegramChat: context.chat,
-      chainId: 4663,
+      chainId,
       forceFresh: true
     });
   });
@@ -1188,15 +1197,15 @@ export function createTelegramTrackedListKeyboard(
   const keyboard = new InlineKeyboard();
   items.forEach((item, index) => {
     keyboard
-      .text(`${index + 1}. 📋 View Result`, `trackedview:${item.address}`)
-      .text(`${index + 1}. 🔁 Rescan`, `trackedrescan:${item.address}`)
+      .text(`${index + 1}. 📋 View Result`, `trackedview:${item.chainId}:${item.address}`)
+      .text(`${index + 1}. 🔁 Rescan`, `trackedrescan:${item.chainId}:${item.address}`)
       .row();
   });
   return keyboard;
 }
 
 function telegramChainName(chainId: number): string {
-  return chainId === 4663 ? "Robinhood" : `Chain ${chainId}`;
+  return telegramSupportedChainName(chainId);
 }
 
 export function formatTelegramResultReply(result: ScanResultView): string {
@@ -1211,7 +1220,7 @@ export function formatTelegramResultReply(result: ScanResultView): string {
   const liquidity = readLiquidityData(result);
   const concentration = readHolderConcentration(result);
   const ownerAddress = result.token.ownerAddress
-    ? ` (${explorerAddressLink(result.token.ownerAddress)})`
+    ? ` (${explorerAddressLink(result.token.ownerAddress, result.token.chainId)})`
     : "";
   const ownership = formatOwnershipStatus(result);
 
@@ -1240,7 +1249,7 @@ export function formatTelegramResultReply(result: ScanResultView): string {
     "",
     ownership ? `👤 Owner: ${ownership}${ownerAddress}` : null,
     result.token.deployerAddress
-      ? `🏗️ Deployer: ${explorerAddressLink(result.token.deployerAddress)}`
+      ? `🏗️ Deployer: ${explorerAddressLink(result.token.deployerAddress, result.token.chainId)}`
       : null,
     deployerBalanceLine(summary.deployerBalance, result),
     devClusterLine(summary.devCluster),
@@ -1298,12 +1307,11 @@ export function createTelegramSectionKeyboard(callbackScanId: string): InlineKey
     .text("🔁 Rescan Token", `rescan:${callbackScanId}`);
 }
 
-/** Robinhood Chain (4663) is the only chain the API implements end-to-end today, matching every
- * other Robinhood-only assumption already baked into this file's scan submission path — so the
- * web app's "robinhood" URL segment is safe to hardcode rather than needing a numeric-to-slug
- * chain registry just for this one link. */
+/** The web app's token route is keyed by chain slug (`/token/robinhood/...`, `/token/arc/...`,
+ * `/token/stable/...`; see apps/web/src/lib/chains.ts), not the numeric chain id. */
 export function telegramFullReportUrl(webAppUrl: string, result: ScanResultView): string {
-  return `${webAppUrl.replace(/\/+$/u, "")}/token/robinhood/${result.scan.address}`;
+  const slug = chainMarketSlug(result.token.chainId);
+  return `${webAppUrl.replace(/\/+$/u, "")}/token/${slug}/${result.scan.address}`;
 }
 
 function adminChartsMenuKeyboard(includeStatsRefresh = false): InlineKeyboard {
@@ -1487,7 +1495,7 @@ export function formatTelegramSectionReply(
         .slice(0, 10)
         .map(
           (wallet) =>
-            `${explorerAddressLink(wallet.address)} — ${escapeMarkdown(roleLabels[wallet.role] ?? wallet.role)}: ${
+            `${explorerAddressLink(wallet.address, result.token.chainId)} — ${escapeMarkdown(roleLabels[wallet.role] ?? wallet.role)}: ${
               wallet.holdingPct === null
                 ? "not measured"
                 : formatSupplyPercentage(wallet.holdingPct)
@@ -1987,8 +1995,17 @@ function shortenAddress(address: string): string {
   return address.length > 12 ? `${address.slice(0, 6)}...${address.slice(-4)}` : address;
 }
 
-function explorerAddressLink(address: string): string {
-  return `[${shortenAddress(address)}](${robinhoodChainBlockscoutUrl}/address/${address})`;
+function explorerBaseUrl(chainId: number): string {
+  const urls: Record<number, string> = {
+    4663: robinhoodChainBlockscoutUrl,
+    5042: arcChainBlockscoutUrl,
+    988: stableChainBlockscoutUrl
+  };
+  return urls[chainId] ?? robinhoodChainBlockscoutUrl;
+}
+
+function explorerAddressLink(address: string, chainId: number): string {
+  return `[${shortenAddress(address)}](${explorerBaseUrl(chainId)}/address/${address})`;
 }
 
 function compact<T>(values: Array<T | null | undefined>): T[] {

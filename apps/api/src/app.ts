@@ -22,11 +22,7 @@ import {
   type ScanRepository
 } from "@genesis-sentinel/database";
 import type { Logger } from "pino";
-import {
-  createDexScreenerMarketDataProvider,
-  robinhoodChainId,
-  type MarketDataProvider
-} from "@genesis-sentinel/providers";
+import { getProviderSet, type MarketDataProvider } from "@genesis-sentinel/providers";
 import { checkRedis, createScanQueue, type ScanQueue } from "@genesis-sentinel/queue";
 import {
   buildTokenSecuritySummary,
@@ -111,10 +107,11 @@ export interface AppOptions {
   scanRepository?: ScanRepository;
   scanQueue?: ScanQueue;
   apiKeyRepository?: ApiKeyRepository;
-  /** Overrides the live DexScreener lookup used to refresh volatile fields on cached reads —
-   * inject a stub in tests so they stay fast, deterministic, and offline rather than depending
-   * on a real network call every time these routes are exercised. */
-  marketDataProvider?: MarketDataProvider;
+  /** Overrides the per-chain market data lookup used to refresh volatile fields on cached reads
+   * — inject a stub in tests so they stay fast, deterministic, and offline rather than depending
+   * on a real network call every time these routes are exercised. Defaults to the same chain
+   * registry the worker's full scans use, so Robinhood, Arc, and Stable are all covered. */
+  getMarketDataProvider?: (chainId: number) => MarketDataProvider | null;
 }
 
 export async function buildApp({
@@ -123,7 +120,7 @@ export async function buildApp({
   scanRepository,
   scanQueue,
   apiKeyRepository,
-  marketDataProvider
+  getMarketDataProvider
 }: AppOptions) {
   const prisma = scanRepository ? undefined : createPrismaClient(env.DATABASE_URL);
   const scans = scanRepository ?? createScanRepository(prisma!);
@@ -277,10 +274,10 @@ export async function buildApp({
   // already-persisted scan result, so a cached read shows current numbers for the parts that
   // change minute to minute without re-running the full detector/simulation pipeline. See
   // market-refresh.ts for why this is DexScreener-only rather than the full explorer-then-market
-  // precedence chain a real scan uses.
+  // precedence chain a real scan uses. Routed through the same chain-keyed provider registry the
+  // worker uses, so Robinhood, Arc, and Stable scans all get refreshed, not just Robinhood.
   const refreshVolatileFields = createMarketRefresher(
-    marketDataProvider ??
-      createDexScreenerMarketDataProvider({ chainId: robinhoodChainId, networkSlug: "robinhood" })
+    getMarketDataProvider ?? ((chainId) => getProviderSet(chainId)?.market ?? null)
   );
   const app = Fastify({
     loggerInstance: logger,
