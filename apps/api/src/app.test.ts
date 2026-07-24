@@ -45,6 +45,40 @@ describe("findExternalTokenChain", () => {
 
     expect(chain).toBeNull();
   });
+
+  it("never reports Arc Chain or Stable Chain as an external/unsupported chain — both are fully supported here", async () => {
+    // Reproduces a real production bug: a Stable Chain token whose bytecode lookup transiently
+    // failed fell through to this external-chain fallback, which only ever excluded "robinhood"
+    // from consideration and so wrongly told the user their Stable Chain token "is not yet
+    // supported" — a false claim about a chain the API has implemented end-to-end.
+    const address = "0x741b4c5e3153ee0849f0d54a45720af02cf18b61" as const;
+
+    const stableChain = await findExternalTokenChain(address, () =>
+      Promise.resolve(Response.json({ pairs: [{ chainId: "stable", baseToken: { address } }] }))
+    );
+    expect(stableChain).toBeNull();
+
+    const arcChain = await findExternalTokenChain(address, () =>
+      Promise.resolve(Response.json({ pairs: [{ chainId: "arc", baseToken: { address } }] }))
+    );
+    expect(arcChain).toBeNull();
+  });
+
+  it("still identifies a genuinely external chain when a supported-chain pair is absent", async () => {
+    const address = "0xc668695dcbcf682de106da94bde65c9bc79362d3" as const;
+    const chain = await findExternalTokenChain(address, () =>
+      Promise.resolve(
+        Response.json({
+          pairs: [
+            { chainId: "stable", baseToken: { address: "0x0000000000000000000000000000000000000009" } },
+            { chainId: "bsc", baseToken: { address } }
+          ]
+        })
+      )
+    );
+
+    expect(chain).toBe("BNB Chain");
+  });
 });
 
 function createInMemoryApiKeyRepository() {

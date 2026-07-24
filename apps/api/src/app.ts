@@ -395,6 +395,26 @@ export async function buildApp({
   const arcAdapter = createArcChainAdapter(env, { allowPublicDefault: true });
   const stableAdapter = createStableChainAdapter(env, { allowPublicDefault: true });
 
+  /**
+   * Some public RPC endpoints (e.g. Stable Chain's drpc.org default) are load-balanced across
+   * multiple backend node providers of varying quality — a single request can hit a node that
+   * doesn't support a given method at all ("the method eth_getCode does not exist"), while the
+   * very next request succeeds. Live-verified at ~40-60% single-attempt failure. A couple of
+   * retries turns that into a >90% success rate without meaningfully slowing down the common
+   * case where the first attempt already succeeds.
+   */
+  async function withRpcRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
   async function detectTokenChain(
     address: `0x${string}`
   ): Promise<{ chainId: number; chainName: string } | null> {
@@ -405,9 +425,9 @@ export async function buildApp({
     ];
     for (const { adapter, chainId, name } of checks) {
       try {
-        const bytecode = await adapter.getBytecode({ address });
+        const bytecode = await withRpcRetry(() => adapter.getBytecode({ address }));
         if (bytecode !== "0x") {
-          const metadata = await adapter.getTokenMetadata(address);
+          const metadata = await withRpcRetry(() => adapter.getTokenMetadata(address));
           if (metadata.name !== null || metadata.symbol !== null || metadata.decimals !== null) {
             return { chainId, chainName: name };
           }
@@ -1514,10 +1534,13 @@ const DEXSCREENER_CHAIN_NAMES: Readonly<Record<string, string>> = {
   polygon: "Polygon",
   optimism: "Optimism",
   avalanche: "Avalanche",
-  solana: "Solana",
-  arc: "Arc Chain",
-  stable: "Stable Chain"
+  solana: "Solana"
 };
+
+/** DexScreener's own chain slugs for every chain this API actually implements end-to-end —
+ * never eligible to be reported as "external"/unsupported here, no matter what DexScreener
+ * returns. Kept in sync with chainMarketSlug in @genesis-sentinel/shared. */
+const SUPPORTED_DEXSCREENER_CHAIN_SLUGS = new Set(["robinhood", "arc", "stable"]);
 
 export async function findExternalTokenChain(
   address: `0x${string}`,
@@ -1535,7 +1558,7 @@ export async function findExternalTokenChain(
     const pair = payload.pairs?.find(
       (candidate) =>
         candidate.baseToken?.address?.toLowerCase() === address.toLowerCase() &&
-        candidate.chainId !== "robinhood"
+        !SUPPORTED_DEXSCREENER_CHAIN_SLUGS.has(candidate.chainId ?? "")
     );
     if (!pair?.chainId) return null;
     return DEXSCREENER_CHAIN_NAMES[pair.chainId] ?? pair.chainId;
