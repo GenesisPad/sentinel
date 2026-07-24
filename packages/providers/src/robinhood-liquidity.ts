@@ -118,7 +118,7 @@ export function createUnsupportedLiquidityProvider(chainId: number): LiquidityPr
       };
     },
     discoverPools() {
-      return [];
+      return Promise.resolve([]);
     }
   };
 }
